@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "phoolverse",
+    "slug": "phoolverse",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/phoolverse.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/phoolverse.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.pushpaktiwari.phoolverse"
+    },
+    "web": {
+      "favicon": "./assets/phoolverse.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ac7eb149-ff8e-4942-83db-a2607a508fd3"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}
