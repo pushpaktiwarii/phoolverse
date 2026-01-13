@@ -52,7 +52,12 @@
     ```
 
 3.  **Firebase Setup**:
-    -   Add your `firebaseConfig` in `src/services/firebase.js`.
+    -   **Configure Firebase**:
+        -   Copy the example config:
+            ```bash
+            cp src/services/firebaseConfig.example.js src/services/firebaseConfig.js
+            ``` 
+        -   Open `src/services/firebaseConfig.js` and replace the placeholder values with your actual Firebase project credentials.
     -   Ensure Realtime Database rules allow Read/Write.
 
 4.  **Run the App**:
