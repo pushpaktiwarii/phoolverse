@@ -90,15 +90,23 @@ export default function AppNavigator() {
                     initialRouteName="Login"
                     screenOptions={{
                         headerShown: false,
-                        contentStyle: { backgroundColor: '#050505' }
+                        contentStyle: { backgroundColor: '#050505' },
+                        animation: 'none', // Instant navigation (User Request)
+                        gestureEnabled: true,
+                        gestureDirection: 'horizontal',
                     }}
                 >
                     {/* 1. Auth */}
-                    <Stack.Screen name="Login" component={LoginScreen} />
+                    <Stack.Screen
+                        name="Login"
+                        component={LoginScreen}
+                    />
 
                     {/* 2. Main App (Tabs) */}
-                    <Stack.Screen name="Lobby" component={MainTabNavigator} />
-                    {/* Note: Keeping name 'Lobby' to maintain flow, but it loads Tabs */}
+                    <Stack.Screen
+                        name="Lobby"
+                        component={MainTabNavigator}
+                    />
 
                     {/* 3. Sub-screens (Full Screen) */}
                     <Stack.Screen name="Room" component={RoomScreen} />
