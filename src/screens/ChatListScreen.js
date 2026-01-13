@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, StatusBar } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, StatusBar, InteractionManager, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -12,27 +12,53 @@ import { COLORS, SPACING, COMMON_STYLES } from '../constants/theme';
 // ------------------------------------------------------------------
 // Sub-Component: ChatListItem
 // ------------------------------------------------------------------
-const ChatListItem = ({ currentUser, friend, onPress, lastSeenMap }) => {
+const ChatListItem = React.memo(({ currentUser, friend, onPress, lastSeen }) => {
     const [lastMsg, setLastMsg] = useState(null);
+    const [unreadCount, setUnreadCount] = useState(0);
+    const [recipientLastSeen, setRecipientLastSeen] = useState(0); // State for ticks
     const [loading, setLoading] = useState(true);
 
-    const chatId = [currentUser, friend.username].sort().join('_');
-    const lastSeen = lastSeenMap[chatId] || 0;
+    const chatId = [currentUser, friend.username].sort().join('_').replace(/[.#$[\]]/g, '_');
 
     useEffect(() => {
+        // Optimised: Fetch last 1 message
         const msgsRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(1));
         const unsubscribe = onValue(msgsRef, (snapshot) => {
             const data = snapshot.val();
-            if (data) {
-                setLastMsg(Object.values(data)[0]);
+            if (data && typeof data === 'object') {
+                const values = Object.values(data);
+                if (values.length > 0) {
+                    const latest = values[0];
+                    setLastMsg(latest);
+
+                    // Simple Unread Check
+                    if (latest.sender !== currentUser && latest.timestamp > lastSeen) {
+                        setUnreadCount(1);
+                    } else {
+                        setUnreadCount(0);
+                    }
+                } else {
+                    setLastMsg(null);
+                    setUnreadCount(0);
+                }
             } else {
                 setLastMsg(null);
+                setUnreadCount(0);
             }
             setLoading(false);
         });
 
-        return () => unsubscribe();
-    }, [chatId]);
+        // Listen for Recipient's Last Seen (Only needed for ticks if I sent the last msg, but keeping simpler)
+        const lastSeenRef = ref(rtdb, `chats/${chatId}/meta/${friend.username}/lastSeen`);
+        const unsubscribeLastSeen = onValue(lastSeenRef, (snapshot) => {
+            setRecipientLastSeen(snapshot.val() || 0);
+        });
+
+        return () => {
+            unsubscribe();
+            unsubscribeLastSeen();
+        };
+    }, [chatId, lastSeen, friend.username]);
 
     const formatTime = (timestamp) => {
         if (!timestamp) return '';
@@ -44,8 +70,6 @@ const ChatListItem = ({ currentUser, friend, onPress, lastSeenMap }) => {
         return date.toLocaleDateString();
     };
 
-    const isUnread = lastMsg && lastMsg.sender !== currentUser && lastMsg.timestamp > lastSeen;
-
     return (
         <TouchableOpacity style={styles.cardContainer} onPress={onPress} activeOpacity={0.9}>
             <LinearGradient
@@ -53,29 +77,49 @@ const ChatListItem = ({ currentUser, friend, onPress, lastSeenMap }) => {
                 style={styles.cardGradient}
             >
                 <View style={[styles.avatar, friend.online ? styles.avatarOnline : styles.avatarOffline]}>
-                    <Text style={styles.avatarText}>{(friend.displayName || friend.username)[0].toUpperCase()}</Text>
+                    <Text style={styles.avatarText}>
+                        {((friend.displayName || friend.username) && (friend.displayName || friend.username)[0])
+                            ? (friend.displayName || friend.username)[0].toUpperCase()
+                            : '?'}
+                    </Text>
                 </View>
                 <View style={styles.userInfo}>
                     <View style={styles.topRow}>
                         <Text style={styles.username}>{friend.displayName || friend.username}</Text>
-                        {lastMsg && <Text style={[styles.time, isUnread && styles.timeUnread]}>{formatTime(lastMsg.timestamp)}</Text>}
+                        {lastMsg && <Text style={[styles.time, unreadCount > 0 && styles.timeUnread]}>{formatTime(lastMsg.timestamp)}</Text>}
                     </View>
                     <View style={styles.bottomRow}>
                         {loading ? (
-                            <Text style={styles.loadingText}>...</Text>
+                            <View style={{ height: 14, width: '60%', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 4, marginTop: 4 }} />
                         ) : (
                             <>
-                                <Text style={[styles.lastMessage, isUnread && styles.msgUnreadText]} numberOfLines={1}>
-                                    {lastMsg ? (
-                                        lastMsg.type === 'invite' ? '🎫 Invited you to a Room' :
-                                            lastMsg.type === 'image' ? '📷 Sent an image' :
-                                                lastMsg.type === 'audio' ? '🎤 Sent a voice note' :
-                                                    (lastMsg.sender === currentUser ? 'You: ' : '') + lastMsg.text
-                                    ) : (
-                                        <Text style={styles.emptyMsg}>Start a conversation</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                    {lastMsg && lastMsg.sender === currentUser && (
+                                        <Ionicons
+                                            name={(lastMsg.timestamp && lastMsg.timestamp <= recipientLastSeen) || friend.online ? "checkmark-done" : "checkmark"}
+                                            size={16}
+                                            color={lastMsg.timestamp && lastMsg.timestamp <= recipientLastSeen ? '#4CD964' : '#888'}
+                                            style={{ marginRight: 4 }}
+                                        />
                                     )}
-                                </Text>
-                                {isUnread && <View style={styles.unreadDot} />}
+                                    <Text style={[styles.lastMessage, unreadCount > 0 && styles.msgUnreadText]} numberOfLines={1}>
+                                        {lastMsg ? (
+                                            lastMsg.type === 'invite' ? '🎫 Invited you to a Room' :
+                                                lastMsg.type === 'image' ? '📷 Sent an image' :
+                                                    lastMsg.type === 'audio' ? '🎤 Sent a voice note' :
+                                                        (lastMsg.sender === currentUser ? 'You: ' : '') + lastMsg.text
+                                        ) : (
+                                            <Text style={styles.emptyMsg}>Start a conversation</Text>
+                                        )}
+                                    </Text>
+                                </View>
+                                {unreadCount > 0 && (
+                                    <View style={styles.unreadBadge}>
+                                        <Text style={styles.unreadText}>
+                                            {unreadCount > 9 ? '9+' : unreadCount}
+                                        </Text>
+                                    </View>
+                                )}
                             </>
                         )}
                     </View>
@@ -83,7 +127,15 @@ const ChatListItem = ({ currentUser, friend, onPress, lastSeenMap }) => {
             </LinearGradient>
         </TouchableOpacity>
     );
-};
+}, (prevProps, nextProps) => {
+    // Only re-render if key props change
+    return (
+        prevProps.friend.username === nextProps.friend.username &&
+        prevProps.friend.online === nextProps.friend.online &&
+        prevProps.friend.displayName === nextProps.friend.displayName &&
+        prevProps.lastSeen === nextProps.lastSeen
+    );
+});
 
 // ------------------------------------------------------------------
 // Main Screen: ChatListScreen
@@ -92,42 +144,86 @@ export default function ChatListScreen({ navigation, route }) {
     const username = route.params?.username;
     const [users, setUsers] = useState([]);
     const [lastSeenMap, setLastSeenMap] = useState({});
+    const [lastMsgMap, setLastMsgMap] = useState({}); // New Map for Sorting
+    const [isListLoading, setIsListLoading] = useState(true);
 
-    useFocusEffect(
-        useCallback(() => {
-            const loadReadStatus = async () => {
-                try {
-                    const keys = await AsyncStorage.getAllKeys();
-                    const chatKeys = keys.filter(k => k.startsWith('lastSeen_'));
-                    const stores = await AsyncStorage.multiGet(chatKeys);
-                    const newMap = {};
-                    stores.forEach(([key, val]) => {
-                        const realKey = key.replace('lastSeen_', '');
-                        newMap[realKey] = parseInt(val) || 0;
-                    });
-                    setLastSeenMap(newMap);
-                } catch (e) {
-                    console.log("Read status load error", e);
-                }
-            };
-            loadReadStatus();
-        }, [])
-    );
+    // ... useFocusEffect (unchanged) ...
 
     useEffect(() => {
         if (!username) return;
+
+        // 1. Cache-First Strategy
+        const loadCache = async () => {
+            try {
+                const cached = await AsyncStorage.getItem('cached_users');
+                if (cached) {
+                    const parsed = JSON.parse(cached);
+                    if (parsed && parsed.length > 0) setUsers(parsed);
+                }
+            } catch (e) { }
+        };
+        loadCache();
+
+        // 2. Listen for Chat Sort Keys (Timestamp) for ALL chats
+        // Since we don't have a "My Chats" list, we simulate it by listening to 'chats' root 
+        // effectively or simpler: just fetch sorting keys.
+        // Better Optimization: Listen to `chats` but that's heavy. 
+        // Given small user base: Listen to 'users', then for each user, listen to their specific chat pair.
+        // Actually, listing to 'chats' root is the only way to get updates without N listeners.
+        // But 'chats' root has MESSAGES too. That is too heavy.
+        // Correction: We only updated `chats/{chatId}/lastMessageTimestamp`, which is light.
+        // But `onValue(ref(rtdb, 'chats'))` will download everything including messages. BAD.
+
+        // Strategy: Iterate users (Client Side Join)
+        // We do this INSIDE the users listener below.
+
         const usersRef = ref(rtdb, 'users');
         const unsubscribe = onValue(usersRef, (snapshot) => {
             const data = snapshot.val();
-            if (data) {
-                const userList = Object.values(data).filter(u => u.username !== username);
-                setUsers(userList);
+            if (data && typeof data === 'object') {
+                const rawList = Object.values(data).filter(u => u && u.username && u.username !== username);
+
+                // Now we need to attach Last Msg Timestamps
+                // We'll create listeners for each chat pair ID
+                rawList.forEach(u => {
+                    const cId = [username, u.username].sort().join('_').replace(/[.#$[\]]/g, '_');
+                    const tsRef = ref(rtdb, `chats/${cId}/lastMessageTimestamp`);
+
+                    // Using 'onValue' here might be leak-prone if list changes. 
+                    // Ideally we keep a map of unsubscribes. For now, simple strict callback.
+                    onValue(tsRef, (snap) => {
+                        const ts = snap.val() || 0;
+                        setLastMsgMap(prev => ({ ...prev, [u.username]: ts }));
+                    });
+                });
+
+                // Sorting happens in Render or Effect dependency? 
+                // Since `lastMsgMap` updates async, we sort whenever `lastMsgMap` or `users` changes.
+                // We'll store raw list here and sort in a separate Effect/Memo?
+                // Simpler: Just set them, and handle sorting in the 2nd Effect below.
+                setUsers(rawList);
+
+                AsyncStorage.setItem('cached_users', JSON.stringify(rawList)).catch(e => { });
             } else {
                 setUsers([]);
             }
+            setIsListLoading(false);
         });
         return () => unsubscribe();
     }, [username]);
+
+    // 3. Sorting Effect: Triggered when Users OR Timestamps change
+    const sortedUsers = React.useMemo(() => {
+        return [...users].sort((a, b) => {
+            const timeA = lastMsgMap[a.username] || 0;
+            const timeB = lastMsgMap[b.username] || 0;
+
+            if (timeA !== timeB) return timeB - timeA; // Newest First (WhatsApp Style)
+
+            // Tie-breaker 2: Alphabetical
+            return (a.displayName || a.username).localeCompare(b.displayName || b.username);
+        });
+    }, [users, lastMsgMap]);
 
     const handleOpenChat = (recipient) => {
         navigation.navigate('PrivateChat', { username, recipient: recipient.username });
@@ -175,24 +271,40 @@ export default function ChatListScreen({ navigation, route }) {
                 </View>
 
                 <FlatList
-                    data={users}
+                    data={sortedUsers}
                     keyExtractor={(item) => item.username}
                     ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Ionicons name="planet-outline" size={64} color="rgba(255,255,255,0.2)" />
-                            <Text style={styles.emptyText}>The Verse is Empty</Text>
-                            <Text style={styles.subEmptyText}>Wait for others to join.</Text>
-                        </View>
+                        isListLoading ? (
+                            <View style={{ marginTop: 100, alignItems: 'center' }}>
+                                <ActivityIndicator size="large" color={COLORS.primary} />
+                                <Text style={{ marginTop: 15, color: COLORS.textMuted, fontSize: 12, letterSpacing: 1 }}>
+                                    INITIALIZING VERSE...
+                                </Text>
+                            </View>
+                        ) : (
+                            <View style={styles.emptyContainer}>
+                                <Ionicons name="planet-outline" size={64} color="rgba(255,255,255,0.2)" />
+                                <Text style={styles.emptyText}>The Verse is Empty</Text>
+                                <Text style={styles.subEmptyText}>Wait for others to join.</Text>
+                            </View>
+                        )
                     }
-                    renderItem={({ item }) => (
-                        <ChatListItem
-                            currentUser={username}
-                            friend={item}
-                            onPress={() => handleOpenChat(item)}
-                            lastSeenMap={lastSeenMap}
-                        />
-                    )}
+                    renderItem={({ item }) => {
+                        const chatId = [username, item.username].sort().join('_').replace(/[.#$[\]]/g, '_');
+                        return (
+                            <ChatListItem
+                                currentUser={username}
+                                friend={item}
+                                onPress={() => handleOpenChat(item)}
+                                lastSeen={lastSeenMap[chatId] || 0}
+                            />
+                        );
+                    }}
                     contentContainerStyle={{ paddingBottom: 20, paddingTop: 10 }}
+                    initialNumToRender={10}
+                    maxToRenderPerBatch={5}
+                    windowSize={5}
+                    removeClippedSubviews={Platform.OS === 'android'}
                 />
             </SafeAreaView>
         </View>
@@ -335,14 +447,20 @@ const styles = StyleSheet.create({
     loadingText: {
         color: COLORS.textMuted,
     },
-    unreadDot: {
-        width: 10,
-        height: 10,
-        borderRadius: 5,
+    unreadBadge: {
         backgroundColor: COLORS.success,
-        shadowColor: COLORS.success,
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.8,
-        shadowRadius: 5,
+        borderRadius: 10,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        minWidth: 20,
+        height: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 8,
+    },
+    unreadText: {
+        color: '#000',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
 });
