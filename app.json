@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/phoolverse.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -21,7 +21,9 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.pushpaktiwari.phoolverse"
+      "package": "com.pushpak.myapp",
+      "softwareKeyboardLayoutMode": "resize",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "favicon": "./assets/phoolverse.png"
