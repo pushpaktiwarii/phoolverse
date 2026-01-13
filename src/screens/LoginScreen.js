@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons'; // Built-in Expo Icons
 import { rtdb } from '../services/firebase';
 import { ref, set, get, update, onDisconnect, serverTimestamp } from 'firebase/database';
 import { COLORS, SPACING, COMMON_STYLES } from '../constants/theme';
+import { registerForPushNotificationsAsync } from '../services/notificationService';
 
 const { width } = Dimensions.get('window');
 
@@ -19,13 +20,13 @@ const FadeInView = ({ delay, children }) => {
         Animated.parallel([
             Animated.timing(fadeAnim, {
                 toValue: 1,
-                duration: 800,
+                duration: 400, // Faster
                 delay: delay,
                 useNativeDriver: true,
             }),
             Animated.timing(slideAnim, {
                 toValue: 0,
-                duration: 800,
+                duration: 400, // Faster
                 delay: delay,
                 useNativeDriver: true,
             })
@@ -53,7 +54,9 @@ export default function LoginScreen({ navigation }) {
         try {
             const storedUsername = await AsyncStorage.getItem('foolverse_username');
             if (storedUsername) {
-                await setPresence(storedUsername);
+                // Parallelize presence & navigation, don't wait for independent tasks
+                setPresence(storedUsername);
+                registerForPushNotificationsAsync(storedUsername); // Background
                 navigation.replace('Lobby', { username: storedUsername });
             }
         } catch (e) {
@@ -67,7 +70,7 @@ export default function LoginScreen({ navigation }) {
         if (!rtdb) return;
         const userRef = ref(rtdb, `users/${user}`);
         // Set online status
-        await update(userRef, { online: true, lastSeen: serverTimestamp() });
+        update(userRef, { online: true, lastSeen: serverTimestamp() });
         // Schedule offline status on disconnect
         onDisconnect(userRef).update({ online: false, lastSeen: serverTimestamp() });
     };
@@ -82,7 +85,7 @@ export default function LoginScreen({ navigation }) {
             if (snapshot.exists() && snapshot.val().password) {
                 setStep('password');
             } else {
-                setStep('register');
+                Alert.alert("Not Found", "Username not found. Please create an account.");
             }
         } catch (error) {
             Alert.alert("Error", error.message);
@@ -95,15 +98,31 @@ export default function LoginScreen({ navigation }) {
         if (!password.trim()) return Alert.alert("Oops", "Enter your password");
         setLoading(true);
 
-        const userRef = ref(rtdb, `users/${username.trim()}`);
-        const snapshot = await get(userRef);
+        try {
+            const userRef = ref(rtdb, `users/${username.trim()}`);
+            const snapshot = await get(userRef);
 
-        if (snapshot.val().password === password) {
-            await AsyncStorage.setItem('foolverse_username', username.trim());
-            await setPresence(username.trim());
-            navigation.replace('Lobby', { username: username.trim() });
-        } else {
-            Alert.alert("Access Denied", "Wrong password!");
+            if (snapshot.exists() && snapshot.val()) {
+                const userData = snapshot.val();
+                if (userData.password === password) {
+                    await AsyncStorage.setItem('foolverse_username', username.trim());
+
+                    // Fast Entry: Don't await these
+                    setPresence(username.trim());
+                    registerForPushNotificationsAsync(username.trim());
+
+                    navigation.replace('Lobby', { username: username.trim() });
+                } else {
+                    Alert.alert("Access Denied", "Wrong password!");
+                    setLoading(false);
+                }
+            } else {
+                Alert.alert("Error", "User not found.");
+                setLoading(false);
+            }
+        } catch (error) {
+            console.error("Login Error:", error);
+            Alert.alert("Login Failed", "Something went wrong. Please check your connection.");
             setLoading(false);
         }
     };
@@ -123,6 +142,10 @@ export default function LoginScreen({ navigation }) {
         onDisconnect(userRef).update({ online: false, lastSeen: serverTimestamp() });
 
         await AsyncStorage.setItem('foolverse_username', username.trim());
+
+        // Background reg
+        registerForPushNotificationsAsync(username.trim());
+
         navigation.replace('Lobby', { username: username.trim() });
     };
 
@@ -194,6 +217,10 @@ export default function LoginScreen({ navigation }) {
                                                 <Text style={styles.btnText}>CONTINUE</Text>
                                                 <Ionicons name="arrow-forward" size={20} color="#fff" />
                                             </LinearGradient>
+                                        </TouchableOpacity>
+
+                                        <TouchableOpacity onPress={() => setStep('register')} style={{ marginTop: 20 }}>
+                                            <Text style={styles.linkText}>New here? <Text style={{ color: '#fff', fontWeight: 'bold' }}>Create Account</Text></Text>
                                         </TouchableOpacity>
                                     </View>
                                 )}
