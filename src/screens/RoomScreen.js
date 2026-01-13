@@ -8,7 +8,8 @@ import RoomChat from '../components/RoomChat';
 import ReactionFloating from '../components/ReactionFloating';
 import { useRoom } from '../services/useRoom';
 import { rtdb } from '../services/firebase';
-import { ref, onValue, push, serverTimestamp } from 'firebase/database';
+import { ref, onValue, push, serverTimestamp, get } from 'firebase/database';
+import { sendPushNotification } from '../services/notificationService';
 
 export default function RoomScreen({ route, navigation }) {
     console.log("RoomScreen Mounted. Params:", route.params);
@@ -25,7 +26,7 @@ export default function RoomScreen({ route, navigation }) {
     // Invite System States
     const [inviteModalVisible, setInviteModalVisible] = useState(false);
     const [viewersModalVisible, setViewersModalVisible] = useState(false);
-    const [onlineUsers, setOnlineUsers] = useState([]);
+    const [invitableUsers, setInvitableUsers] = useState([]);
 
     const amIController = videoState.controller === username;
     const hasContent = !!videoState.url;
@@ -38,10 +39,12 @@ export default function RoomScreen({ route, navigation }) {
             const unsub = onValue(usersRef, (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
-                    const list = Object.values(data).filter(u => u.username !== username && u.online);
-                    setOnlineUsers(list);
+                    // Show ALL users except myself (Offline users included)
+                    // Added safety check for 'u' and 'u.username'
+                    const list = Object.values(data).filter(u => u && u.username && u.username !== username);
+                    setInvitableUsers(list);
                 } else {
-                    setOnlineUsers([]);
+                    setInvitableUsers([]);
                 }
             });
             return () => unsub();
@@ -50,6 +53,42 @@ export default function RoomScreen({ route, navigation }) {
 
     // --- Back Handling ---
     const lastBackPress = useRef(0);
+
+    // ... (Skipping unchanged parts) ...
+
+    {/* Invite Modal */ }
+    <Modal
+        animationType="fade"
+        transparent={true}
+        visible={inviteModalVisible}
+        onRequestClose={() => setInviteModalVisible(false)}
+    >
+        <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>Invite Friends</Text>
+                <FlatList
+                    data={invitableUsers}
+                    keyExtractor={item => item.username}
+                    ListEmptyComponent={<Text style={styles.emptyText}>No users found.</Text>}
+                    renderItem={({ item }) => (
+                        <TouchableOpacity style={styles.userRow} onPress={() => sendInvite(item)}>
+                            <View style={[styles.avatar, !item.online && { opacity: 0.5 }]}><Text style={styles.avatarText}>{item.username[0]}</Text></View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.usernameText}>{item.username}</Text>
+                                {!item.online && <Text style={{ fontSize: 10, color: '#666' }}>Offline</Text>}
+                            </View>
+                            <Ionicons name="send" size={20} color="#6C5CE7" />
+                        </TouchableOpacity>
+                    )}
+                />
+                <TouchableOpacity style={styles.closeBtn} onPress={() => setInviteModalVisible(false)}>
+                    <Text style={styles.closeText}>Cancel</Text>
+                </TouchableOpacity>
+            </View>
+        </View>
+    </Modal>
+
+    // --- Back Handling ---
 
     useEffect(() => {
         const backAction = () => {
@@ -160,20 +199,34 @@ export default function RoomScreen({ route, navigation }) {
 
     const sendInvite = async (recipient) => {
         try {
+            if (!recipient || !recipient.username) return;
+
             const chatId = [username, recipient.username].sort().join('_');
             const messagesRef = ref(rtdb, `chats/${chatId}/messages`);
             await push(messagesRef, {
                 type: 'invite',
                 text: 'Join my Watch Party! 🎥',
                 roomId: roomId,
-                roomId: roomId,
                 sender: username,
                 timestamp: serverTimestamp()
             });
             Alert.alert("Sent", `Invite sent to ${recipient.username}`);
+
+            // Send Push Notification
+            try {
+                const tokenRef = ref(rtdb, `users/${recipient.username}/pushToken`);
+                const snapshot = await get(tokenRef);
+                if (snapshot.exists()) {
+                    const token = snapshot.val();
+                    await sendPushNotification(token, username, "Invited you to a Watch Party! 🎥", { roomId: roomId, type: 'invite' });
+                }
+            } catch (e) {
+                console.log("Failed to send push invite", e);
+            }
+
             setInviteModalVisible(false);
         } catch (error) {
-            Alert.alert("Error", "Could not send invite");
+            Alert.alert("Error", `Could not send invite: ${error.message}`);
         }
     };
 
@@ -329,13 +382,16 @@ export default function RoomScreen({ route, navigation }) {
                     <View style={styles.modalContent}>
                         <Text style={styles.modalTitle}>Invite Friends</Text>
                         <FlatList
-                            data={onlineUsers}
+                            data={invitableUsers}
                             keyExtractor={item => item.username}
-                            ListEmptyComponent={<Text style={styles.emptyText}>No one online.</Text>}
+                            ListEmptyComponent={<Text style={styles.emptyText}>No users found.</Text>}
                             renderItem={({ item }) => (
                                 <TouchableOpacity style={styles.userRow} onPress={() => sendInvite(item)}>
-                                    <View style={styles.avatar}><Text style={styles.avatarText}>{item.username[0]}</Text></View>
-                                    <Text style={styles.usernameText}>{item.username}</Text>
+                                    <View style={[styles.avatar, !item.online && { opacity: 0.5 }]}><Text style={styles.avatarText}>{item.username[0]}</Text></View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.usernameText}>{item.username}</Text>
+                                        {!item.online && <Text style={{ fontSize: 10, color: '#666' }}>Offline</Text>}
+                                    </View>
                                     <Ionicons name="send" size={20} color="#6C5CE7" />
                                 </TouchableOpacity>
                             )}

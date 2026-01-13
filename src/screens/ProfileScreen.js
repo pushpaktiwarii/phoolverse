@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, Image, StyleSheet, Alert, Acti
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+
 import { rtdb, storage } from '../services/firebase';
 import { ref, onValue, update } from 'firebase/database';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -144,6 +145,9 @@ export default function ProfileScreen({ route, navigation }) {
                         <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={saving}>
                             {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save Changes</Text>}
                         </TouchableOpacity>
+
+                        {/* --- DEBUG AREA --- */}
+
                     </View>
 
                 </KeyboardAvoidingView>
