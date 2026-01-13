@@ -1,20 +1,23 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av'; // Voice Support
 import { rtdb, storage } from '../services/firebase';
-import { ref, push, onValue, query, limitToLast, serverTimestamp, remove, update } from 'firebase/database';
+import { ref, push, onValue, query, limitToLast, serverTimestamp, remove, update, get } from 'firebase/database';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { COLORS, SPACING, COMMON_STYLES } from '../constants/theme';
+import { sendPushNotification } from '../services/notificationService';
 
 export default function PrivateChatScreen({ route, navigation }) {
     const { username, recipient } = route.params;
     const [recipientName, setRecipientName] = useState(recipient);
     const [recipientAvatar, setRecipientAvatar] = useState(null); // Added Avatar State
     const [messages, setMessages] = useState([]);
+    const [loading, setLoading] = useState(true); // Track initial load
     const [input, setInput] = useState('');
     const [uploading, setUploading] = useState(false);
     const [recording, setRecording] = useState(null);
@@ -25,25 +28,63 @@ export default function PrivateChatScreen({ route, navigation }) {
     const chatId = [username, recipient].sort().join('_').replace(/[.#$[\]]/g, '_');
     const [isOnline, setIsOnline] = useState(false);
 
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+    useEffect(() => {
+        // Keyboard Handlers
+        const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => {
+            setKeyboardHeight(e.endCoordinates.height);
+        });
+        const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => {
+            setKeyboardHeight(0);
+        });
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, []);
+
+    const [isTyping, setIsTyping] = useState(false);
+    const typingTimeoutRef = useRef(null);
+
+    const [recipientLastSeen, setRecipientLastSeen] = useState(0);
+
     useEffect(() => {
         const markRead = async () => {
-            try { await AsyncStorage.setItem(`lastSeen_${chatId}`, Date.now().toString()); } catch (e) { }
+            // Update "Last Seen" in Firebase Global Chat Meta
+            try {
+                update(ref(rtdb, `chats/${chatId}/meta/${username}`), { lastSeen: serverTimestamp() });
+                await AsyncStorage.setItem(`lastSeen_${chatId}`, Date.now().toString());
+            } catch (e) { }
         };
         markRead();
 
+        // Listen for Recipient's Last Seen
+        const lastSeenRef = ref(rtdb, `chats/${chatId}/meta/${recipient}/lastSeen`);
+        const unsubscribeLastSeen = onValue(lastSeenRef, (snapshot) => {
+            setRecipientLastSeen(snapshot.val() || 0);
+        });
+
         // Listen for Messages
-        const messagesRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(50));
+        const messagesRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(20));
         const unsubscribeMsg = onValue(messagesRef, (snapshot) => {
             const data = snapshot.val();
             if (data) {
-                // Convert to array and preserve Keys for deletion
                 const msgList = Object.entries(data).map(([key, val]) => ({ id: key, ...val }))
                     .sort((a, b) => b.timestamp - a.timestamp);
+
+                // Play Sound/Haptic if new message arrived and not from me
+                if (msgList.length > messages.length && msgList[0]?.sender !== username) {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Light);
+                }
+
                 setMessages(msgList);
                 markRead();
             } else {
                 setMessages([]);
             }
+            setLoading(false);
         });
 
         // Listen for Recipient Status & Profile
@@ -53,8 +94,14 @@ export default function PrivateChatScreen({ route, navigation }) {
             if (data) {
                 setIsOnline(data.online === true);
                 if (data.displayName) setRecipientName(data.displayName);
-                if (data.avatarUrl) setRecipientAvatar(data.avatarUrl); // Set Avatar
+                if (data.avatarUrl) setRecipientAvatar(data.avatarUrl);
             }
+        });
+
+        // Listen for Typing Status
+        const typingRef = ref(rtdb, `chats/${chatId}/typing/${recipient}`);
+        const unsubscribeTyping = onValue(typingRef, (snapshot) => {
+            setIsTyping(snapshot.val() === true);
         });
 
         Audio.requestPermissionsAsync();
@@ -62,9 +109,12 @@ export default function PrivateChatScreen({ route, navigation }) {
         return () => {
             unsubscribeMsg();
             unsubscribeStatus();
+            unsubscribeTyping();
+            unsubscribeLastSeen();
             if (playingSound) playingSound.unloadAsync();
+            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         };
-    }, [chatId, recipient]);
+    }, [chatId, recipient, messages.length]); // Added messages.length dependency
 
     // --- Helpers ---
     const isSameDay = (d1, d2) => {
@@ -98,8 +148,20 @@ export default function PrivateChatScreen({ route, navigation }) {
         ]);
     };
 
+    const handleTyping = (text) => {
+        setInput(text);
+
+        // Update Typing Status
+        update(ref(rtdb, `chats/${chatId}/typing`), { [username]: true });
+
+        // Debounce clearing status
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+            update(ref(rtdb, `chats/${chatId}/typing`), { [username]: false });
+        }, 2000);
+    };
+
     // --- Media & Send Logic (Unchanged but ensuring implementation consistency) ---
-    // (Collapsed for brevity in tool call, ensuring core logic remains)
     const pickImage = async () => {
         let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, items: 1, quality: 0.7 });
         if (!result.canceled) uploadMedia(result.assets[0].uri, 'image');
@@ -119,6 +181,28 @@ export default function PrivateChatScreen({ route, navigation }) {
         setRecording(null);
         uploadMedia(uri, 'audio');
     };
+    // Helper to send notification
+    const notifyRecipient = async (messageBody) => {
+        try {
+            console.log(`[DEBUG] Notifying recipient: ${recipient}`);
+            const tokenRef = ref(rtdb, `users/${recipient}/pushToken`);
+            const snapshot = await get(tokenRef);
+            if (snapshot.exists()) {
+                const token = snapshot.val();
+                console.log(`[DEBUG] Found token for ${recipient}: ${token}`);
+                // Fire and forget
+                await sendPushNotification(token, username, messageBody, { chatId: chatId });
+                console.log(`[DEBUG] Push notification sent request fired.`);
+            } else {
+                console.log(`[DEBUG] No push token found for user: ${recipient}`);
+            }
+        } catch (e) {
+            console.log("Failed to notify", e);
+        }
+    };
+
+    // Helper to send notification
+
     const uploadMedia = async (uri, type) => {
         if (!storage) { Alert.alert("Error", "Storage not ready"); return; }
         setUploading(true);
@@ -131,15 +215,31 @@ export default function PrivateChatScreen({ route, navigation }) {
             await uploadBytes(fileRef, blob);
             const downloadUrl = await getDownloadURL(fileRef);
             const msgRef = ref(rtdb, `chats/${chatId}/messages`);
+
+            // Update sort key for Chat List
+            update(ref(rtdb, `chats/${chatId}`), { lastMessageTimestamp: serverTimestamp() });
+
             await push(msgRef, { mediaUrl: downloadUrl, type: type, sender: username, timestamp: serverTimestamp() });
+
+            // Notify
+            notifyRecipient(type === 'image' ? 'Sent an image 📷' : 'Sent a voice note 🎤');
+
         } catch (e) { Alert.alert("Failed", "Could not send media."); } finally { setUploading(false); }
     };
     const handleSendText = async () => {
         if (!input.trim()) return;
         const text = input.trim();
         setInput('');
+        update(ref(rtdb, `chats/${chatId}/typing`), { [username]: false }); // Stop typing immediately
+
+        // Update sort key for Chat List
+        update(ref(rtdb, `chats/${chatId}`), { lastMessageTimestamp: serverTimestamp() });
+
         const msgRef = ref(rtdb, `chats/${chatId}/messages`);
         await push(msgRef, { text, type: 'text', sender: username, timestamp: serverTimestamp() });
+
+        // Notify
+        notifyRecipient(text);
     };
     const playAudio = async (url) => {
         try {
@@ -154,7 +254,6 @@ export default function PrivateChatScreen({ route, navigation }) {
     };
 
     // --- Render Logic ---
-    // --- Render Logic ---
     const INVITE_EXPIRY_MS = 15 * 60 * 1000; // 15 Minutes
 
     const renderItem = ({ item, index }) => {
@@ -167,6 +266,12 @@ export default function PrivateChatScreen({ route, navigation }) {
 
         return (
             <View>
+                {showDateHeader && (
+                    <View style={styles.dateHeader}>
+                        <Text style={styles.dateHeaderText}>{formatDateHeader(item.timestamp)}</Text>
+                    </View>
+                )}
+
                 <TouchableOpacity onLongPress={() => handleLongPress(item)} activeOpacity={0.8}>
                     <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
                         {/* Image */}
@@ -222,17 +327,21 @@ export default function PrivateChatScreen({ route, navigation }) {
                         {/* Text */}
                         {item.type === 'text' && <Text style={styles.msgText}>{item.text}</Text>}
 
-                        <Text style={[styles.msgTime, isMe ? { color: '#ccc' } : { color: '#888' }]}>
-                            {item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
-                        </Text>
+                        <View style={styles.metaRow}>
+                            <Text style={[styles.msgTime, isMe ? { color: '#ccc' } : { color: '#888' }]}>
+                                {item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
+                            </Text>
+                            {isMe && (
+                                <Ionicons
+                                    name={(item.timestamp && item.timestamp <= recipientLastSeen) || isOnline ? "checkmark-done" : "checkmark"}
+                                    size={16}
+                                    color={item.timestamp && item.timestamp <= recipientLastSeen ? '#4CD964' : 'rgba(255,255,255,0.5)'}
+                                    style={{ marginLeft: 4 }}
+                                />
+                            )}
+                        </View>
                     </View>
                 </TouchableOpacity>
-
-                {showDateHeader && (
-                    <View style={styles.dateHeader}>
-                        <Text style={styles.dateHeaderText}>{formatDateHeader(item.timestamp)}</Text>
-                    </View>
-                )}
             </View>
         );
     };
@@ -255,8 +364,8 @@ export default function PrivateChatScreen({ route, navigation }) {
 
                 <View style={styles.headerInfo}>
                     <Text style={styles.headerTitle}>{recipientName}</Text>
-                    <Text style={[styles.subTitle, { color: isOnline ? '#4CD964' : '#888' }]}>
-                        {isOnline ? "Active Now" : "Offline"}
+                    <Text style={[styles.subTitle, { color: isTyping ? COLORS.primary : (isOnline ? '#4CD964' : '#888') }]}>
+                        {isTyping ? "Typing..." : (isOnline ? "Active Now" : "Offline")}
                     </Text>
                 </View>
                 <TouchableOpacity onPress={handleHangout} style={styles.hangoutBtn}>
@@ -264,29 +373,53 @@ export default function PrivateChatScreen({ route, navigation }) {
                 </TouchableOpacity>
             </View>
 
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}>
-                <FlatList
-                    ref={flatListRef}
-                    data={messages}
-                    keyExtractor={(item) => item.id}
-                    contentContainerStyle={styles.listContent}
-                    renderItem={renderItem}
-                    inverted
-                />
+            <View style={{ flex: 1 }}>
+                {loading ? (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color={COLORS.primary} />
+                    </View>
+                ) : (
+                    <FlatList
+                        ref={flatListRef}
+                        data={messages}
+                        keyExtractor={(item) => item.id}
+                        contentContainerStyle={styles.listContent}
+                        renderItem={renderItem}
+                        inverted
+                        initialNumToRender={15}
+                        maxToRenderPerBatch={10}
+                        windowSize={10}
+                        removeClippedSubviews={Platform.OS === 'android'} // Memory improvement for Android
+                        ListEmptyComponent={
+                            <View style={{ alignItems: 'center', marginTop: 50, opacity: 0.5, transform: [{ scaleY: -1 }] }}>
+                                <Ionicons name="chatbubbles-outline" size={50} color="#ccc" />
+                                <Text style={{ color: '#ccc', marginTop: 10 }}>No messages yet</Text>
+                            </View>
+                        }
+                    />
+                )}
+            </View>
 
-                <View style={styles.inputContainer}>
-                    <TouchableOpacity onPress={pickImage} style={styles.iconBtn} disabled={uploading}>
-                        <Ionicons name="images-outline" size={24} color="#999" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPressIn={startRecording} onPressOut={stopRecording} style={[styles.iconBtn, isRecording && styles.recordingBtn]} disabled={uploading}>
-                        <Ionicons name={isRecording ? "mic" : "mic-outline"} size={24} color={isRecording ? "#fff" : "#999"} />
-                    </TouchableOpacity>
-                    <TextInput style={styles.input} placeholder={isRecording ? "Recording..." : "Message..."} placeholderTextColor="#777" value={input} onChangeText={setInput} onSubmitEditing={handleSendText} editable={!isRecording} />
-                    <TouchableOpacity style={[styles.sendBtn, (input.trim() || uploading) ? styles.sendBtnActive : null]} onPress={handleSendText} disabled={uploading}>
-                        {uploading ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={20} color={input.trim() ? "#fff" : "#555"} />}
-                    </TouchableOpacity>
-                </View>
-            </KeyboardAvoidingView>
+            <View style={[styles.inputContainer, { marginBottom: keyboardHeight + (Platform.OS === 'ios' ? 0 : 10) }]}>
+                <TouchableOpacity onPress={pickImage} style={styles.iconBtn} disabled={uploading}>
+                    <Ionicons name="images-outline" size={24} color="#999" />
+                </TouchableOpacity>
+                <TouchableOpacity onPressIn={startRecording} onPressOut={stopRecording} style={[styles.iconBtn, isRecording && styles.recordingBtn]} disabled={uploading}>
+                    <Ionicons name={isRecording ? "mic" : "mic-outline"} size={24} color={isRecording ? "#fff" : "#999"} />
+                </TouchableOpacity>
+                <TextInput
+                    style={[styles.input, { maxHeight: 100 }]}
+                    placeholder={isRecording ? "Recording..." : "Message..."}
+                    placeholderTextColor="#777"
+                    value={input}
+                    onChangeText={handleTyping}
+                    multiline
+                    editable={!isRecording}
+                />
+                <TouchableOpacity style={[styles.sendBtn, (input.trim() || uploading) ? styles.sendBtnActive : null]} onPress={handleSendText} disabled={uploading}>
+                    {uploading ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={20} color={input.trim() ? "#fff" : "#555"} />}
+                </TouchableOpacity>
+            </View>
         </SafeAreaView>
     );
 }
@@ -322,7 +455,8 @@ const styles = StyleSheet.create({
     msgMe: { alignSelf: 'flex-end', backgroundColor: COLORS.primary, borderBottomRightRadius: 4 },
     msgOther: { alignSelf: 'flex-start', backgroundColor: COLORS.bgSurface, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: COLORS.border },
     msgText: { color: COLORS.textMain, fontSize: 16 },
-    msgTime: { fontSize: 10, alignSelf: 'flex-end', marginTop: 4, opacity: 0.8 },
+    metaRow: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 4 },
+    msgTime: { fontSize: 10, opacity: 0.8 },
     imageMsg: { width: 220, height: 220, borderRadius: 10, backgroundColor: '#000' },
     audioContainer: { flexDirection: 'row', alignItems: 'center', width: 150 },
 
