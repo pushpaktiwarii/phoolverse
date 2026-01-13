@@ -17,7 +17,7 @@ export default function LobbyScreen({ route, navigation }) {
     useEffect(() => {
         // Fetch Profile
         const userRef = ref(rtdb, `users/${username}`);
-        onValue(userRef, (snap) => {
+        const userUnsubscribe = onValue(userRef, (snap) => {
             const data = snap.val();
             if (data) {
                 setAvatarUrl(data.avatarUrl);
@@ -26,13 +26,13 @@ export default function LobbyScreen({ route, navigation }) {
         });
 
         const publicRef = ref(rtdb, 'public_rooms');
-        const unsubscribe = onValue(publicRef, (snapshot) => {
+        const publicUnsubscribe = onValue(publicRef, (snapshot) => {
             const data = snapshot.val();
-            if (data) {
+            if (data && typeof data === 'object') {
                 const list = Object.values(data)
                     .map(room => ({
                         ...room,
-                        realUserCount: room.active_users ? Object.keys(room.active_users).length : 0
+                        realUserCount: (room.active_users && typeof room.active_users === 'object') ? Object.keys(room.active_users).length : 0
                     }))
                     .filter(room => room.realUserCount > 0) // Robust Filter
                     .sort((a, b) => b.realUserCount - a.realUserCount);
@@ -43,7 +43,10 @@ export default function LobbyScreen({ route, navigation }) {
             setLoading(false);
         });
 
-        return () => unsubscribe();
+        return () => {
+            userUnsubscribe();
+            publicUnsubscribe();
+        };
     }, []);
 
     const handleCreatePublic = () => {
