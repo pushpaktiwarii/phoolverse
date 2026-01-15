@@ -1,79 +1,56 @@
 # Phoolverse 🌺
 
-**Phoolverse** is a premium, minimal social hangout application built with **React Native (Expo)** and **Firebase**. It focuses on real-time connections, allowing users to watch videos together, chat privately, and see who's online in a sleek, dark-themed environment.
+**Phoolverse** is a premium, minimal social hangout application built with **React Native (Expo)**, **Socket.io**, and **Firebase**. It focuses on **hyper-speed synchronization** for watch parties, seamless swipe navigation, and rich social interactions.
 
 ## ✨ Features
 
-### 🎥 Real-time Watch Party ("The Room")
--   **Synchronized Playback**: Watch reels/videos in perfect sync with friends.
--   **Live Interactions**: Real-time play/pause controls shared across all viewers.
--   **Public & Private Logic**: Invite-only private rooms or join the public lobby.
+### 🎥 Ultra-Low Latency Watch Party
+-   **Socket.io Synchronized**: Replaced basic polling with event-driven Socket.io for **0ms latency** sync.
+-   **Live Interactions**: Real-time play/pause/seek controls shared universally.
+-   **Host Controls**: Only the assigned host can control the flow; viewers are locked for a focused experience.
+-   **History API Override**: Custom WebView injection to detect `pushState` for instant video changes.
 
-### 💬 Advanced Chat System
--   **WhatsApp-Style Interface**:
-    -   Date-grouped messages (Today, Yesterday).
-    -   Smart Tick system (Sent/Delivered).
--   **Media Support**: Send Voice Notes 🎙️ and Images 📷.
--   **Smart Invites**:
-    -   Send "Watch Party" invites directly in chat.
-    -   **Auto-Expiration**: Invites expire after 15 minutes.
-    -   **Decline Logic**: Declining an invite marks it as "Expired" but keeps the history.
--   **Message Actions**: Long-press to delete your messages.
+### 🧭 Swipe Navigation
+-   **Modern UI**: Seamlessly swipe between **Chats**, **Hangout (Home)**, and **Profile** tabs.
+-   **Material Top Tabs**: Smooth gestures and transitions with a clean, bottom-positioned tab bar.
 
-### 👤 Identity & Social
--   **Persistent Profiles**: Custom Avatars, Bios, and Status.
--   **Real-time Presence**: See who is "Active Now" or "Offline".
--   **Smart Lobby**: Live list of active public rooms.
+### 💬 Rich Private Chat
+-   **Reply System**: Swipe or long-press to reply to specific messages with context.
+-   **Smart Status**: "Active Now", "Active 5m ago" status updates.
+-   **Media & Invites**:
+    -   Send Voice Notes 🎙️ and Images 📷.
+    -   **Watch Party Invites**: Send direct invites that expire in 15 mins.
+-   **Unread Indicators**: Smart unread bubbles that vanish instantly upon viewing.
+
+### 👤 Social & Polish
+-   **Live View Count**: Real-time "Eye Icon" showing active room participants.
+-   **Floating Chat**: Instagram Live-style floating messages over the video player.
+-   **Reactions**: Floating emoji reactions (😂, ❤️, 🔥) with physics-based animations.
 
 ## 🛠️ Tech Stack
 
--   **Frontend**: React Native, Expo, React Navigation.
--   **Backend (BaaS)**: Firebase Realtime Database (for sync), Firebase Storage (for media).
+-   **Frontend**: React Native, Expo, React Navigation (Material Top Tabs).
+-   **Real-time Engine**: **Socket.io** (Custom Node.js Server) + Firebase Realtime Database (Backup/Meta).
+-   **Backend**: Node.js, Express (for Socket server).
 -   **Styling**: Custom "Clean Black" Theme (`#050505` Backgrounds, `#6C5CE7` Accents).
--   **Build**: EAS (Expo Application Services) for automated APK builds.
 
-## 🚀 Getting Started
+## 🚀 Deployment Guide
 
-### Prerequisites
--   Node.js & npm
--   Expo Go App (on mobile)
+### 1. The Socket Server
+> ⚠️ **Important**: The app relies on a custom Node.js Socket server. You cannot just deploy the APK; you must host the server first.
 
-### Installation
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/your-username/phoolverse.git
-    cd phoolverse
+1.  Navigate to the `server/` folder.
+2.  Deploy this folder to a service like **Render**, **Railway**, or **Heroku**.
+3.  Once deployed, get your **Public URL** (e.g., `https://my-socket-server.onrender.com`).
+4.  Update `src/config.js` in the React Native project:
+    ```javascript
+    export const SOCKET_URL = "https://your-deployed-server-url.com";
     ```
 
-2.  **Install dependencies**:
-    ```bash
-    npm install
-    ```
-
-3.  **Firebase Setup**:
-    -   **Configure Firebase**:
-        -   Copy the example config:
-            ```bash
-            cp src/services/firebaseConfig.example.js src/services/firebaseConfig.js
-            ``` 
-        -   Open `src/services/firebaseConfig.js` and replace the placeholder values with your actual Firebase project credentials.
-    -   Ensure Realtime Database rules allow Read/Write.
-
-4.  **Run the App**:
-    ```bash
-    npx expo start
-    ```
-    -   Scan the QR code with **Expo Go** (Android/iOS).
-
-## 📱 Building APK (Android)
-
-Using **EAS Build**:
-
-1.  Install EAS CLI: `npm install -g eas-cli`
-2.  Login: `eas login`
-3.  Configure: `eas build:configure`
-4.  Build:
+### 2. The Mobile App (APK)
+1.  **Install EAS CLI**: `npm install -g eas-cli`
+2.  **Configure**: `eas build:configure`
+3.  **Build**:
     ```bash
     eas build -p android --profile preview
     ```
