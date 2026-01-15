@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import VideoPlayer from '../components/VideoPlayer';
 import RoomChat from '../components/RoomChat';
 import ReactionFloating from '../components/ReactionFloating';
-import { useRoom } from '../services/useRoom';
+import { useRoomSocket } from '../services/useRoomSocket';
 import { rtdb } from '../services/firebase';
 import { ref, onValue, push, serverTimestamp, get } from 'firebase/database';
 import { sendPushNotification } from '../services/notificationService';
@@ -14,7 +14,7 @@ import { sendPushNotification } from '../services/notificationService';
 export default function RoomScreen({ route, navigation }) {
     console.log("RoomScreen Mounted. Params:", route.params);
     const { roomId, isHost, username, isPublic = false } = route.params;
-    const { messages, sendMessage, videoState, updateVideoState, sendReaction, reactionStream, roomState } = useRoom(roomId, username, isPublic);
+    const { messages, sendMessage, videoState, updateVideoState, sendReaction, reactionStream, roomState } = useRoomSocket(roomId, username);
 
     const [inputUrl, setInputUrl] = useState('');
     const [chatVisible, setChatVisible] = useState(false);
@@ -28,8 +28,12 @@ export default function RoomScreen({ route, navigation }) {
     const [viewersModalVisible, setViewersModalVisible] = useState(false);
     const [invitableUsers, setInvitableUsers] = useState([]);
 
+    // Floating Chat State
+    const [floatingMessages, setFloatingMessages] = useState([]);
+
     const amIController = videoState.controller === username;
     const hasContent = !!videoState.url;
+    const lastEmit = useRef(0); // Throttling ref
 
     const QUICK_EMOJIS = ['😂', '❤️', '🔥', '😮', '👏'];
 
@@ -55,6 +59,23 @@ export default function RoomScreen({ route, navigation }) {
     const lastBackPress = useRef(0);
 
     // ... (Skipping unchanged parts) ...
+
+    {/* Floating Chat Logic: Sync with incoming messages */ }
+    useEffect(() => {
+        if (messages.length > 0) {
+            const lastMsg = messages[messages.length - 1];
+            // Avoid duplicates or old history on load (simple check)
+            if (Date.now() - lastMsg.timestamp < 5000) {
+                const id = Date.now();
+                setFloatingMessages(prev => [...prev.slice(-2), { ...lastMsg, _lid: id }]);
+
+                // Auto expire
+                setTimeout(() => {
+                    setFloatingMessages(prev => prev.filter(m => m._lid !== id));
+                }, 4000);
+            }
+        }
+    }, [messages]);
 
     {/* Invite Modal */ }
     <Modal
@@ -114,23 +135,31 @@ export default function RoomScreen({ route, navigation }) {
 
         // Case 2: Browser History & Content
         // Simplified: Always try to go back. Stuck? Use Double Tap.
-        if (hasContent && playerRef.current) {
+        if (hasContent && playerRef.current && amIController) {
             const now = Date.now();
             if (lastBackPress.current && now - lastBackPress.current < 2000) {
                 // Double tap detected: Force Stop Content
-                if (Platform.OS === 'android') ToastAndroid.show("Exiting Browser...", ToastAndroid.SHORT);
+                if (Platform.OS === 'android') ToastAndroid.show("Stopping Party...", ToastAndroid.SHORT);
                 handleStopContent();
             } else {
                 lastBackPress.current = now;
                 playerRef.current.goBack();
-                if (Platform.OS === 'android') ToastAndroid.show("Going Back... (Double tap to exit)", ToastAndroid.SHORT);
+                if (Platform.OS === 'android') ToastAndroid.show("Going Back... (Double tap to stop)", ToastAndroid.SHORT);
             }
             return;
         }
 
-        // Case 3: Stop Content
+        // Case 3: Stop Content logic (Controller vs Viewer)
         if (hasContent) {
-            handleStopContent();
+            if (amIController) {
+                handleStopContent();
+            } else {
+                // Viewer just leaves
+                Alert.alert("Leave Party?", "Are you sure you want to stop watching?", [
+                    { text: "Stay", style: "cancel" },
+                    { text: "Leave", style: "destructive", onPress: () => navigation.goBack() }
+                ]);
+            }
             return;
         }
 
@@ -252,6 +281,12 @@ export default function RoomScreen({ route, navigation }) {
                     </View>
                 </View>
 
+                {/* View Count Badge */}
+                <View style={styles.viewCountBadge}>
+                    <Ionicons name="eye" size={14} color="#ccc" style={{ marginRight: 4 }} />
+                    <Text style={styles.viewCountText}>{roomState?.users?.length || 1}</Text>
+                </View>
+
                 {hasContent ? (
                     <TouchableOpacity style={styles.stopBtn} onPress={handleHeaderExit}>
                         <Ionicons name="close-circle" size={24} color="#FF4B4B" />
@@ -277,7 +312,10 @@ export default function RoomScreen({ route, navigation }) {
                             canControl={amIController}
                             onUrlChanged={(newUrl) => {
                                 if (amIController) {
-                                    updateVideoState({ url: newUrl, isPlaying: true });
+                                    if (amIController) {
+                                        // Direct Update (VideoPlayer already debounces)
+                                        updateVideoState({ url: newUrl, isPlaying: true });
+                                    }
                                 }
                             }}
                             onNavigationStateChange={(navState) => {
@@ -289,6 +327,16 @@ export default function RoomScreen({ route, navigation }) {
                                 onReact={sendReaction}
                                 reactionStream={reactionStream}
                             />
+                        </View>
+
+                        {/* Floating Chat Overlay Layer */}
+                        <View pointerEvents="none" style={styles.floatingChatLayer}>
+                            {floatingMessages.map(msg => (
+                                <View key={msg._lid} style={styles.floatingBubble}>
+                                    <Text style={styles.floatingSender}>{msg.sender}</Text>
+                                    <Text style={styles.floatingText}>{msg.text}</Text>
+                                </View>
+                            ))}
                         </View>
                     </View>
                 ) : (
@@ -417,6 +465,8 @@ const styles = StyleSheet.create({
     statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
     dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#555', marginRight: 5 },
     statusText: { color: '#888', fontSize: 10 },
+    viewCountBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, marginRight: 10 },
+    viewCountText: { color: '#ccc', fontSize: 12, fontWeight: 'bold' },
     stopBtn: { marginRight: 15 },
     inviteBtn: { padding: 8, backgroundColor: '#6C5CE7', borderRadius: 20 },
 
@@ -437,7 +487,7 @@ const styles = StyleSheet.create({
         height: 44,
         justifyContent: 'center',
         alignItems: 'center',
-        marginLeft: 8,
+        marginLeft: 4, // Reduced from 8 to 4 to bring icons closer
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.1)',
     },
@@ -454,7 +504,36 @@ const styles = StyleSheet.create({
     urlInput: { width: '80%', backgroundColor: '#222', padding: 15, borderRadius: 12, color: '#fff', textAlign: 'center' },
 
     // Layers
-    reactionLayer: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', paddingBottom: 20, paddingRight: 10 },
+    reactionLayer: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', paddingBottom: 80, paddingRight: 10, zIndex: 20 },
+
+    // Floating Chat
+    floatingChatLayer: {
+        position: 'absolute',
+        bottom: 20, // Sit above controls
+        left: 20,
+        maxWidth: '60%',
+        zIndex: 15,
+    },
+    floatingBubble: {
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        borderRadius: 20,
+        paddingHorizontal: 15,
+        paddingVertical: 8,
+        marginBottom: 8,
+        alignSelf: 'flex-start',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+    },
+    floatingSender: {
+        color: '#ffdd59', // Different color for sender
+        fontSize: 11,
+        fontWeight: 'bold',
+        marginBottom: 2
+    },
+    floatingText: {
+        color: '#fff',
+        fontSize: 13,
+    },
 
     // Chat Overlay
     chatOverlayWrapper: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },

@@ -6,7 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { rtdb } from '../services/firebase';
-import { ref, onValue, query, limitToLast, update, serverTimestamp } from 'firebase/database';
+import { ref, onValue, query, limitToLast, update, serverTimestamp, get } from 'firebase/database';
 import { COLORS, SPACING, COMMON_STYLES } from '../constants/theme';
 
 // ------------------------------------------------------------------
@@ -17,6 +17,7 @@ const ChatListItem = React.memo(({ currentUser, friend, onPress, lastSeen }) => 
     const [unreadCount, setUnreadCount] = useState(0);
     const [recipientLastSeen, setRecipientLastSeen] = useState(0); // State for ticks
     const [loading, setLoading] = useState(true);
+    const latestRef = React.useRef(null); // Ref to access latest msg inside other listeners
 
     const chatId = [currentUser, friend.username].sort().join('_').replace(/[.#$[\]]/g, '_');
 
@@ -30,13 +31,25 @@ const ChatListItem = React.memo(({ currentUser, friend, onPress, lastSeen }) => 
                 if (values.length > 0) {
                     const latest = values[0];
                     setLastMsg(latest);
+                    latestRef.current = latest; // Store ref for logic check
 
-                    // Simple Unread Check
-                    if (latest.sender !== currentUser && latest.timestamp > lastSeen) {
-                        setUnreadCount(1);
-                    } else {
-                        setUnreadCount(0);
-                    }
+                    // Check unread against "lastSeen" prop (Initial) OR wait for live listener
+                    // We'll let the live listener handle future updates, but set initial here?
+                    // Better to just store latest and let the myLastSeen listener do the comparison?
+                    // No, myLastSeen listener might fire first.
+                    // We need to fetch myLastSeen here inside onValue? No, that's nesting listeners.
+
+                    // We will rely on the separate listener for myLastSeen to trigger the check.
+                    // BUT we also need to trigger it here incase message arrives AFTER lastSeen update.
+
+                    get(ref(rtdb, `chats/${chatId}/meta/${currentUser}/lastSeen`)).then(snap => {
+                        const mySeen = snap.val() || 0;
+                        if (latest.sender !== currentUser && latest.timestamp > mySeen) {
+                            setUnreadCount(1);
+                        } else {
+                            setUnreadCount(0);
+                        }
+                    });
                 } else {
                     setLastMsg(null);
                     setUnreadCount(0);
@@ -48,17 +61,29 @@ const ChatListItem = React.memo(({ currentUser, friend, onPress, lastSeen }) => 
             setLoading(false);
         });
 
-        // Listen for Recipient's Last Seen (Only needed for ticks if I sent the last msg, but keeping simpler)
-        const lastSeenRef = ref(rtdb, `chats/${chatId}/meta/${friend.username}/lastSeen`);
-        const unsubscribeLastSeen = onValue(lastSeenRef, (snapshot) => {
-            setRecipientLastSeen(snapshot.val() || 0);
+        // Listen for Recipient's Last Seen (For Ticks)
+        const recipientLastSeenRef = ref(rtdb, `chats/${chatId}/meta/${friend.username}/lastSeen`);
+        const subRecipient = onValue(recipientLastSeenRef, (snap) => setRecipientLastSeen(snap.val() || 0));
+
+        // Listen for MY Last Seen (For Unread Count) - Realtime Update
+        const myLastSeenRef = ref(rtdb, `chats/${chatId}/meta/${currentUser}/lastSeen`);
+        const subMyLastSeen = onValue(myLastSeenRef, (snap) => {
+            const mySeen = snap.val() || 0;
+
+            // Re-eval unread when my 'seen' time changes
+            if (latestRef.current && latestRef.current.sender !== currentUser && latestRef.current.timestamp > mySeen) {
+                setUnreadCount(1);
+            } else {
+                setUnreadCount(0);
+            }
         });
 
         return () => {
             unsubscribe();
-            unsubscribeLastSeen();
+            subRecipient();
+            subMyLastSeen();
         };
-    }, [chatId, lastSeen, friend.username]);
+    }, [chatId, friend.username, currentUser]); // Removed 'lastSeen' prop dependency as we fetch it live
 
     const formatTime = (timestamp) => {
         if (!timestamp) return '';

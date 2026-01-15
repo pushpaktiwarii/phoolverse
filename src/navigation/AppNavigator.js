@@ -1,7 +1,8 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+
+import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { Text, View } from 'react-native';
 
 import LoginScreen from '../screens/LoginScreen';
@@ -13,7 +14,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import PresenceManager from '../components/PresenceManager';
 
 const Stack = createNativeStackNavigator();
-const Tab = createBottomTabNavigator();
+const Tab = createMaterialTopTabNavigator();
 
 function MainTabNavigator({ route }) {
     // Safety check: specific route params might be missing during hot reload
@@ -21,19 +22,21 @@ function MainTabNavigator({ route }) {
 
     return (
         <Tab.Navigator
+            tabBarPosition="bottom"
             screenOptions={({ route }) => ({
-                headerShown: false,
+                swipeEnabled: true,
                 tabBarStyle: {
                     backgroundColor: '#050505',
+                    borderTopWidth: 1,
                     borderTopColor: '#222',
-                    height: 60, // Keep height for touch area
-                    paddingTop: 0,
-                    paddingBottom: 0,
+                    height: 60,
+                    elevation: 0, // Remove shadow
                 },
-                tabBarShowLabel: false, // Hide default label
-                tabBarActiveTintColor: '#6C5CE7',
-                tabBarInactiveTintColor: '#666',
+                tabBarIndicatorStyle: { height: 0 }, // Hide indicator line for cleaner look
+                tabBarPressColor: 'transparent',
+                tabBarShowLabel: false,
                 tabBarIcon: ({ focused, color }) => {
+                    const isActive = focused;
                     let label = 'Tab';
                     if (route.name === 'Chats') label = 'CHATS';
                     else if (route.name === 'Hangout') label = 'HANGOUT';
@@ -41,18 +44,18 @@ function MainTabNavigator({ route }) {
 
                     return (
                         <View style={{
-                            width: 100, // Enforce width to prevent wrapping
+                            width: 100,
                             height: '100%',
                             justifyContent: 'center',
                             alignItems: 'center',
-                            paddingTop: 10 // Center vertically in bar
+                            // paddingTop: 10
                         }}>
                             <Text
                                 numberOfLines={1}
                                 style={{
-                                    color: color,
+                                    color: isActive ? '#6C5CE7' : '#666',
                                     fontWeight: 'bold',
-                                    fontSize: 11, // Slightly smaller for safety
+                                    fontSize: 11,
                                     letterSpacing: 0.5,
                                     textAlign: 'center'
                                 }}>

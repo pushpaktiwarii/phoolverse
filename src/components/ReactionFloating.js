@@ -57,7 +57,12 @@ const FloatingEmoji = ({ emoji, startX }) => {
 
     const translateY = anim.interpolate({
         inputRange: [0, 1],
-        outputRange: [0, -300], // Float up 300px
+        outputRange: [0, -400], // Float up higher
+    });
+
+    const translateX = anim.interpolate({
+        inputRange: [0, 0.25, 0.5, 0.75, 1],
+        outputRange: [0, 15, -15, 15, 0], // Wobble effect
     });
 
     const opacity = anim.interpolate({
@@ -76,7 +81,7 @@ const FloatingEmoji = ({ emoji, startX }) => {
                 styles.floater,
                 {
                     left: startX,
-                    transform: [{ translateY }, { scale }],
+                    transform: [{ translateY }, { translateX }, { scale }],
                     opacity
                 }
             ]}
@@ -90,6 +95,7 @@ const styles = StyleSheet.create({
     container: {
         ...StyleSheet.absoluteFillObject, // Cover the parent (video container)
         justifyContent: 'flex-end',
+        zIndex: 20, // Ensure it floats above video but below controls if needed
     },
     floatingArea: {
         flex: 1,
@@ -97,8 +103,11 @@ const styles = StyleSheet.create({
     },
     floater: {
         position: 'absolute',
-        bottom: 0,
-        fontSize: 24,
+        bottom: 100, // Starts above the 80px Footer
+        fontSize: 30, // Balanced size
+        textShadowColor: 'rgba(0, 0, 0, 0.75)',
+        textShadowOffset: { width: 1, height: 1 },
+        textShadowRadius: 3,
     },
     controls: {
         flexDirection: 'row',

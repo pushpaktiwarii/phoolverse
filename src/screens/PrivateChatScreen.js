@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Keyboard } from 'react-native';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, Image, ActivityIndicator, Alert, Keyboard, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -11,6 +12,13 @@ import { ref, push, onValue, query, limitToLast, serverTimestamp, remove, update
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { COLORS, SPACING, COMMON_STYLES } from '../constants/theme';
 import { sendPushNotification } from '../services/notificationService';
+import { LayoutAnimation, UIManager } from 'react-native';
+
+if (Platform.OS === 'android') {
+    if (UIManager.setLayoutAnimationEnabledExperimental) {
+        UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+}
 
 export default function PrivateChatScreen({ route, navigation }) {
     const { username, recipient } = route.params;
@@ -23,6 +31,7 @@ export default function PrivateChatScreen({ route, navigation }) {
     const [recording, setRecording] = useState(null);
     const [isRecording, setIsRecording] = useState(false);
     const [playingSound, setPlayingSound] = useState(null);
+    const [replyingTo, setReplyingTo] = useState(null); // New: Reply State
 
     const flatListRef = useRef(null);
     const chatId = [username, recipient].sort().join('_').replace(/[.#$[\]]/g, '_');
@@ -50,14 +59,31 @@ export default function PrivateChatScreen({ route, navigation }) {
 
     const [recipientLastSeen, setRecipientLastSeen] = useState(0);
 
+    // --- Aggressive Mark Read Strategy ---
+    const markRead = useCallback(async () => {
+        try {
+            // console.log("Marking Read for:", username);
+            const ts = serverTimestamp();
+            update(ref(rtdb, `chats/${chatId}/meta/${username}`), { lastSeen: ts });
+            await AsyncStorage.setItem(`lastSeen_${chatId}`, Date.now().toString());
+        } catch (e) { console.log("MarkRead Error", e) }
+    }, [chatId, username]);
+
+    // 1. Mark read on Focus (Screen visible)
+    useFocusEffect(
+        useCallback(() => {
+            markRead();
+
+            // 2. Mark read on App Resume
+            const sub = AppState.addEventListener('change', nextAppState => {
+                if (nextAppState === 'active') markRead();
+            });
+            return () => sub.remove();
+        }, [markRead])
+    );
+
     useEffect(() => {
-        const markRead = async () => {
-            // Update "Last Seen" in Firebase Global Chat Meta
-            try {
-                update(ref(rtdb, `chats/${chatId}/meta/${username}`), { lastSeen: serverTimestamp() });
-                await AsyncStorage.setItem(`lastSeen_${chatId}`, Date.now().toString());
-            } catch (e) { }
-        };
+        // 3. Mark read on Mount (Initial)
         markRead();
 
         // Listen for Recipient's Last Seen
@@ -136,16 +162,31 @@ export default function PrivateChatScreen({ route, navigation }) {
         return date.toLocaleDateString();
     };
 
+    const formatLastSeen = (timestamp) => {
+        if (!timestamp) return "Offline";
+        const diff = Date.now() - timestamp;
+        if (diff < 60000) return "Just now";
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+        return new Date(timestamp).toLocaleDateString();
+    };
+
     const handleLongPress = (msg) => {
-        if (msg.sender !== username) return; // Only delete own messages
-        Alert.alert("Delete Message?", "This will remove it for everyone.", [
-            { text: "Cancel", style: "cancel" },
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        Alert.alert("Message Options", "", [
             {
+                text: "Reply", onPress: () => {
+                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    setReplyingTo(msg);
+                }
+            },
+            (msg.sender === username) ? {
                 text: "Delete", style: 'destructive', onPress: async () => {
                     await remove(ref(rtdb, `chats/${chatId}/messages/${msg.id}`));
                 }
-            }
-        ]);
+            } : null,
+            { text: "Cancel", style: "cancel" }
+        ].filter(Boolean));
     };
 
     const handleTyping = (text) => {
@@ -229,14 +270,25 @@ export default function PrivateChatScreen({ route, navigation }) {
     const handleSendText = async () => {
         if (!input.trim()) return;
         const text = input.trim();
+        const replyContext = replyingTo ? { id: replyingTo.id, text: replyingTo.text, sender: replyingTo.sender } : null;
+
         setInput('');
+        setReplyingTo(null); // Clear Reply
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
         update(ref(rtdb, `chats/${chatId}/typing`), { [username]: false }); // Stop typing immediately
 
         // Update sort key for Chat List
         update(ref(rtdb, `chats/${chatId}`), { lastMessageTimestamp: serverTimestamp() });
 
         const msgRef = ref(rtdb, `chats/${chatId}/messages`);
-        await push(msgRef, { text, type: 'text', sender: username, timestamp: serverTimestamp() });
+        await push(msgRef, {
+            text,
+            type: 'text',
+            sender: username,
+            timestamp: serverTimestamp(),
+            replyTo: replyContext
+        });
 
         // Notify
         notifyRecipient(text);
@@ -274,6 +326,14 @@ export default function PrivateChatScreen({ route, navigation }) {
 
                 <TouchableOpacity onLongPress={() => handleLongPress(item)} activeOpacity={0.8}>
                     <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
+
+                        {/* Reply Citation */}
+                        {item.replyTo && (
+                            <View style={[styles.replyCitation, isMe ? { borderLeftColor: 'rgba(255,255,255,0.5)' } : { borderLeftColor: COLORS.primary }]}>
+                                <Text style={styles.replySender}>{item.replyTo.sender === username ? "You" : item.replyTo.sender}</Text>
+                                <Text style={styles.replyText} numberOfLines={1}>{item.replyTo.text || "Media Attachment"}</Text>
+                            </View>
+                        )}
                         {/* Image */}
                         {item.type === 'image' && <Image source={{ uri: item.mediaUrl }} style={styles.imageMsg} resizeMode="cover" />}
 
@@ -333,7 +393,7 @@ export default function PrivateChatScreen({ route, navigation }) {
                             </Text>
                             {isMe && (
                                 <Ionicons
-                                    name={(item.timestamp && item.timestamp <= recipientLastSeen) || isOnline ? "checkmark-done" : "checkmark"}
+                                    name={item.timestamp && item.timestamp <= recipientLastSeen ? "checkmark-done" : "checkmark"}
                                     size={16}
                                     color={item.timestamp && item.timestamp <= recipientLastSeen ? '#4CD964' : 'rgba(255,255,255,0.5)'}
                                     style={{ marginLeft: 4 }}
@@ -365,7 +425,7 @@ export default function PrivateChatScreen({ route, navigation }) {
                 <View style={styles.headerInfo}>
                     <Text style={styles.headerTitle}>{recipientName}</Text>
                     <Text style={[styles.subTitle, { color: isTyping ? COLORS.primary : (isOnline ? '#4CD964' : '#888') }]}>
-                        {isTyping ? "Typing..." : (isOnline ? "Active Now" : "Offline")}
+                        {isTyping ? "Typing..." : (isOnline ? "Active Now" : `Last seen ${formatLastSeen(recipientLastSeen)}`)}
                     </Text>
                 </View>
                 <TouchableOpacity onPress={handleHangout} style={styles.hangoutBtn}>
@@ -401,24 +461,43 @@ export default function PrivateChatScreen({ route, navigation }) {
             </View>
 
             <View style={[styles.inputContainer, { marginBottom: keyboardHeight + (Platform.OS === 'ios' ? 0 : 10) }]}>
-                <TouchableOpacity onPress={pickImage} style={styles.iconBtn} disabled={uploading}>
-                    <Ionicons name="images-outline" size={24} color="#999" />
-                </TouchableOpacity>
-                <TouchableOpacity onPressIn={startRecording} onPressOut={stopRecording} style={[styles.iconBtn, isRecording && styles.recordingBtn]} disabled={uploading}>
-                    <Ionicons name={isRecording ? "mic" : "mic-outline"} size={24} color={isRecording ? "#fff" : "#999"} />
-                </TouchableOpacity>
-                <TextInput
-                    style={[styles.input, { maxHeight: 100 }]}
-                    placeholder={isRecording ? "Recording..." : "Message..."}
-                    placeholderTextColor="#777"
-                    value={input}
-                    onChangeText={handleTyping}
-                    multiline
-                    editable={!isRecording}
-                />
-                <TouchableOpacity style={[styles.sendBtn, (input.trim() || uploading) ? styles.sendBtnActive : null]} onPress={handleSendText} disabled={uploading}>
-                    {uploading ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={20} color={input.trim() ? "#fff" : "#555"} />}
-                </TouchableOpacity>
+                {/* Reply Preview */}
+                {replyingTo && (
+                    <View style={styles.replyPreview}>
+                        <View style={styles.replyIndication}>
+                            <Text style={styles.replyPreviewSender}>Replying to {replyingTo.sender === username ? "Yourself" : replyingTo.sender}</Text>
+                            <Text style={styles.replyPreviewText} numberOfLines={1}>{replyingTo.text || "Media"}</Text>
+                        </View>
+                        <TouchableOpacity onPress={() => {
+                            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                            setReplyingTo(null);
+                        }}>
+                            <Ionicons name="close-circle" size={20} color="#ccc" />
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                <View style={styles.inputInner}>
+                    <TouchableOpacity onPress={pickImage} style={styles.iconBtn} disabled={uploading}>
+                        <Ionicons name="images-outline" size={24} color="#999" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPressIn={startRecording} onPressOut={stopRecording} style={[styles.iconBtn, isRecording && styles.recordingBtn]} disabled={uploading}>
+                        <Ionicons name={isRecording ? "mic" : "mic-outline"} size={24} color={isRecording ? "#fff" : "#999"} />
+                    </TouchableOpacity>
+                    <TextInput
+                        style={[styles.input, { maxHeight: 100 }]}
+                        placeholder={isRecording ? "Recording..." : "Message..."}
+                        placeholderTextColor="#777"
+                        value={input}
+                        onChangeText={handleTyping}
+                        onFocus={markRead} // 4. Mark read on touching input
+                        multiline
+                        editable={!isRecording}
+                    />
+                    <TouchableOpacity style={[styles.sendBtn, (input.trim() || uploading) ? styles.sendBtnActive : null]} onPress={handleSendText} disabled={uploading}>
+                        {uploading ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={20} color={input.trim() ? "#fff" : "#555"} />}
+                    </TouchableOpacity>
+                </View>
             </View>
         </SafeAreaView>
     );
@@ -466,10 +545,28 @@ const styles = StyleSheet.create({
 
     // Input
     inputContainer: {
-        flexDirection: 'row', padding: SPACING.s, margin: SPACING.s, borderRadius: 30, alignItems: 'center',
+        flexDirection: 'column', padding: 0, margin: SPACING.s, borderRadius: 20,
         backgroundColor: COLORS.bgSurface, borderWidth: 1, borderColor: COLORS.border,
-        marginBottom: Platform.OS === 'ios' ? 0 : SPACING.s
+        marginBottom: Platform.OS === 'ios' ? 0 : SPACING.s, overflow: 'hidden'
     },
+    inputInner: { flexDirection: 'row', alignItems: 'center', padding: SPACING.s },
+
+    // Reply Styles
+    replyCitation: {
+        borderLeftWidth: 4, paddingLeft: 8, marginBottom: 8, opacity: 0.8,
+        backgroundColor: 'rgba(0,0,0,0.1)', paddingVertical: 4, borderRadius: 4
+    },
+    replySender: { fontSize: 10, fontWeight: 'bold', color: '#fff', opacity: 0.9 },
+    replyText: { fontSize: 12, color: '#fff' },
+
+    replyPreview: {
+        flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: 'rgba(255,255,255,0.05)',
+        borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.1)'
+    },
+    replyIndication: { flex: 1, borderLeftWidth: 3, borderLeftColor: COLORS.primary, paddingLeft: 8 },
+    replyPreviewSender: { color: COLORS.primary, fontWeight: 'bold', fontSize: 12 },
+    replyPreviewText: { color: '#ccc', fontSize: 12 },
+
     iconBtn: { padding: 8, marginRight: 2 },
     recordingBtn: { backgroundColor: COLORS.error, borderRadius: 20 },
     input: { flex: 1, color: COLORS.textMain, paddingHorizontal: 10, fontSize: 16 },
