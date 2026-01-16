@@ -173,15 +173,28 @@ export default function RoomScreen({ route, navigation }) {
     // --- Content Handlers ---
     const handlePlayUrl = () => {
         if (!inputUrl) return;
+
+        // Strict Host Lock
+        if (videoState.controller && videoState.controller !== username) {
+            Alert.alert("Locked", `${videoState.controller} is currently hosting. Wait for them to finish.`);
+            return;
+        }
+
         updateVideoState({
             url: inputUrl,
             isPlaying: true,
-            controller: username
+            controller: username // I become the host
         });
         setInputUrl('');
     };
 
     const handleOpenApp = (type) => {
+        // Strict Host Lock
+        if (videoState.controller && videoState.controller !== username) {
+            Alert.alert("Locked", `${videoState.controller} is currently hosting. Wait for them to finish.`);
+            return;
+        }
+
         if (Platform.OS === 'web') {
             alert("Browse Mode is only available on Mobile App.");
             return;
@@ -193,16 +206,22 @@ export default function RoomScreen({ route, navigation }) {
         updateVideoState({
             url: url,
             isPlaying: true,
-            controller: username
+            controller: username // I become the host
         });
     };
 
     const handleStopContent = () => {
+        // Strict Host Lock
+        if (videoState.controller && videoState.controller !== username) {
+            // Should technically be handled by UI hiding, but double safe
+            return;
+        }
+
         // Force update even if controller is glitchy locally
         updateVideoState({
             url: null,
             isPlaying: false,
-            controller: null
+            controller: null // Release control
         });
     };
 
