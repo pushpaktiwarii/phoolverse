@@ -54,10 +54,13 @@ export default function LoginScreen({ navigation }) {
         try {
             const storedUsername = await AsyncStorage.getItem('foolverse_username');
             if (storedUsername) {
-                // Parallelize presence & navigation, don't wait for independent tasks
-                setPresence(storedUsername);
-                registerForPushNotificationsAsync(storedUsername); // Background
                 navigation.replace('Lobby', { username: storedUsername });
+
+                // Background Tasks (Fire & Forget)
+                setTimeout(() => {
+                    setPresence(storedUsername);
+                    registerForPushNotificationsAsync(storedUsername);
+                }, 100);
             }
         } catch (e) {
             console.error("Failed to load username", e);
