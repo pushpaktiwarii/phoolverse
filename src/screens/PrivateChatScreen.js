@@ -86,6 +86,18 @@ export default function PrivateChatScreen({ route, navigation }) {
         // 3. Mark read on Mount (Initial)
         markRead();
 
+        // 0. LOAD CACHE (Instant Display)
+        const loadCache = async () => {
+            try {
+                const cached = await AsyncStorage.getItem(`chat_cache_${chatId}`);
+                if (cached) {
+                    setMessages(JSON.parse(cached));
+                    setLoading(false); // Hide spinner immediately
+                }
+            } catch (e) { }
+        };
+        loadCache();
+
         // Listen for Recipient's Last Seen
         const lastSeenRef = ref(rtdb, `chats/${chatId}/meta/${recipient}/lastSeen`);
         const unsubscribeLastSeen = onValue(lastSeenRef, (snapshot) => {
@@ -93,7 +105,7 @@ export default function PrivateChatScreen({ route, navigation }) {
         });
 
         // Listen for Messages
-        const messagesRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(20));
+        const messagesRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(50));
         const unsubscribeMsg = onValue(messagesRef, (snapshot) => {
             const data = snapshot.val();
             if (data) {
@@ -106,6 +118,10 @@ export default function PrivateChatScreen({ route, navigation }) {
                 }
 
                 setMessages(msgList);
+
+                // UPDATE CACHE
+                AsyncStorage.setItem(`chat_cache_${chatId}`, JSON.stringify(msgList)).catch(e => { });
+
                 markRead();
             } else {
                 setMessages([]);
@@ -140,7 +156,7 @@ export default function PrivateChatScreen({ route, navigation }) {
             if (playingSound) playingSound.unloadAsync();
             if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         };
-    }, [chatId, recipient, messages.length]); // Added messages.length dependency
+    }, [chatId, recipient]); // Removed messages dependency to avoid loop, cache update is inside listener
 
     // --- Helpers ---
     const isSameDay = (d1, d2) => {
