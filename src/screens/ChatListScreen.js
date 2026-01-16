@@ -177,58 +177,39 @@ export default function ChatListScreen({ navigation, route }) {
     useEffect(() => {
         if (!username) return;
 
-        // 1. Cache-First Strategy
+        // 1. Cache-First Strategy (Load full sorted state)
         const loadCache = async () => {
             try {
-                const cached = await AsyncStorage.getItem('cached_users');
+                const cached = await AsyncStorage.getItem(`cached_chat_list_${username}`);
                 if (cached) {
                     const parsed = JSON.parse(cached);
-                    if (parsed && parsed.length > 0) setUsers(parsed);
+                    if (parsed && parsed.length > 0) {
+                        setUsers(parsed);
+                        // We set users directly as the cached version should already be sorted/enriched roughly
+                        setIsListLoading(false);
+                    }
                 }
             } catch (e) { }
         };
         loadCache();
 
-        // 2. Listen for Chat Sort Keys (Timestamp) for ALL chats
-        // Since we don't have a "My Chats" list, we simulate it by listening to 'chats' root 
-        // effectively or simpler: just fetch sorting keys.
-        // Better Optimization: Listen to `chats` but that's heavy. 
-        // Given small user base: Listen to 'users', then for each user, listen to their specific chat pair.
-        // Actually, listing to 'chats' root is the only way to get updates without N listeners.
-        // But 'chats' root has MESSAGES too. That is too heavy.
-        // Correction: We only updated `chats/{chatId}/lastMessageTimestamp`, which is light.
-        // But `onValue(ref(rtdb, 'chats'))` will download everything including messages. BAD.
-
-        // Strategy: Iterate users (Client Side Join)
-        // We do this INSIDE the users listener below.
-
+        // 2. Listen for Users
         const usersRef = ref(rtdb, 'users');
         const unsubscribe = onValue(usersRef, (snapshot) => {
             const data = snapshot.val();
             if (data && typeof data === 'object') {
                 const rawList = Object.values(data).filter(u => u && u.username && u.username !== username);
 
-                // Now we need to attach Last Msg Timestamps
-                // We'll create listeners for each chat pair ID
+                // Helper to setup individual listeners safely
                 rawList.forEach(u => {
                     const cId = [username, u.username].sort().join('_').replace(/[.#$[\]]/g, '_');
                     const tsRef = ref(rtdb, `chats/${cId}/lastMessageTimestamp`);
-
-                    // Using 'onValue' here might be leak-prone if list changes. 
-                    // Ideally we keep a map of unsubscribes. For now, simple strict callback.
                     onValue(tsRef, (snap) => {
                         const ts = snap.val() || 0;
                         setLastMsgMap(prev => ({ ...prev, [u.username]: ts }));
                     });
                 });
-
-                // Sorting happens in Render or Effect dependency? 
-                // Since `lastMsgMap` updates async, we sort whenever `lastMsgMap` or `users` changes.
-                // We'll store raw list here and sort in a separate Effect/Memo?
-                // Simpler: Just set them, and handle sorting in the 2nd Effect below.
                 setUsers(rawList);
-
-                AsyncStorage.setItem('cached_users', JSON.stringify(rawList)).catch(e => { });
             } else {
                 setUsers([]);
             }
@@ -236,6 +217,13 @@ export default function ChatListScreen({ navigation, route }) {
         });
         return () => unsubscribe();
     }, [username]);
+
+    // Save Cache whenever Sorted List changes
+    useEffect(() => {
+        if (sortedUsers.length > 0) {
+            AsyncStorage.setItem(`cached_chat_list_${username}`, JSON.stringify(sortedUsers)).catch(e => { });
+        }
+    }, [sortedUsers, username]);
 
     // 3. Sorting Effect: Triggered when Users OR Timestamps change
     const sortedUsers = React.useMemo(() => {
