@@ -118,15 +118,50 @@ const VideoPlayer = forwardRef(({
     document.head.appendChild(style);
   }
 
-  // Auto-Unmute Logic
-  setInterval(() => {
-     const videos = document.querySelectorAll('video');
-     videos.forEach(v => {
-         if (v.muted) {
-             v.muted = false;
-         }
-     });
-  }, 1000);
+  function tryUnmute() {
+      const videos = document.querySelectorAll('video');
+      if (videos.length === 0) return;
+      
+      videos.forEach(v => {
+          if (v.muted) {
+              v.muted = false;
+              // Force play if paused
+              if (v.paused) v.play().catch(() => {});
+          }
+      });
+  }
+
+  function burstUnmute() {
+      // Run aggressive unmute for 5 seconds after change/load
+      // This overcomes browser default mute but allows user to mute manually afterwards
+      let attempts = 0;
+      const interval = setInterval(() => {
+          const videos = document.querySelectorAll('video');
+          videos.forEach(v => {
+               // Only unmute if it appears to be auto-muted (no user interaction flag?)
+               // Hard to distinguish, but stopping the interval eventually allows manual mute.
+               if (v.muted) {
+                   v.muted = false;
+                   if (v.paused) v.play().catch(() => {});
+               }
+          });
+          
+          attempts++;
+          if (attempts > 20) clearInterval(interval); // Stop after ~5 sec (20 * 250ms)
+      }, 250);
+  }
+
+  // Trigger Burst ONLY on initial load
+  burstUnmute();
+  
+  // DISABLE auto-unmute on Reel Change per user request
+  // The user wants manual control. If they muted it, it should stay muted.
+  // If they unmuted it, hopefully the platform persists it.
+  // window.addEventListener('popstate', () => setTimeout(burstUnmute, 500));
+  
+  // Also watch for DOM changes (new video element added)
+  // Simple hack: if we detect a new video, burst again? 
+  // For now, history/load based burst should cover most reels.
 
 })();
 true;
@@ -281,9 +316,33 @@ true;
                             onNavigationStateChange(navState);
                         }
 
-                        // Fallback for non-SPA navigation
-                        if (!canControl) return;
+                        // VIEWERS: STRICT NAVIGATION LOCK
+                        // If I am a viewer, and I try to go somewhere else, STOP ME.
+                        if (!canControl) {
+                            const current = normalizeUrl(videoUrl);
+                            const next = normalizeUrl(navState.url);
 
+                            // Allow some minor drift (query params) but block path changes
+                            // Instagram/YouTube valid drift check:
+                            if (next && next !== current) {
+                                console.log("Viewer tried to drift to:", next, "Correction needed.");
+                                // STOP IT
+                                if (webViewRef.current) {
+                                    webViewRef.current.stopLoading();
+                                    // If we drifted, force reload the correct sync URL
+                                    // But 'goBack' is gentler if they just clicked a link
+                                    // webViewRef.current.goBack();  <-- Can get stuck in loop
+                                    // Better: Just ignore update, and if it renders wrong, the 'currentSource' prop 
+                                    // logic in useEffect will catch it eventually? No, useEffect only runs on prop change.
+
+                                    // Force reset to host URL
+                                    // setCurrentSource({ uri: videoUrl }); // This might trigger reload loop
+                                }
+                                return;
+                            }
+                        }
+
+                        // HOST Logic (Normal)
                         const current = normalizeUrl(videoUrl);
                         const next = normalizeUrl(navState.url);
 
