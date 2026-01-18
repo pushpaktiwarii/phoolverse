@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "446483566416",
+    "firebase_url": "https://foolverse-default-rtdb.firebaseio.com",
+    "project_id": "foolverse",
+    "storage_bucket": "foolverse.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:446483566416:android:75b7c0a13a91510139a655",
+        "android_client_info": {
+          "package_name": "com.pushpak.myapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB7j11BZQTe2Lj5J_cu53NP6_AnHIfrfws"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
