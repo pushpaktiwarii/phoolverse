@@ -4,8 +4,8 @@
 node_modules/
 
 # Security
-src/services/firebaseConfig.js
-google-services.json
+# src/services/firebaseConfig.js
+# google-services.json
 .env
 .env.local
 *.env
