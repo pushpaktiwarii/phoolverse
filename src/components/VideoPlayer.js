@@ -151,8 +151,7 @@ const VideoPlayer = forwardRef(({
       }, 250);
   }
 
-  // Trigger Burst ONLY on initial load
-  burstUnmute();
+  // burstUnmute(); // Auto-unmute disabled to allow natural feed behavior (muted scroll)
   
   // DISABLE auto-unmute on Reel Change per user request
   // The user wants manual control. If they muted it, it should stay muted.
@@ -291,7 +290,8 @@ true;
                     domStorageEnabled={true}
                     sharedCookiesEnabled={true} // Persist Login State
                     allowsInlineMediaPlayback={true}
-                    mediaPlaybackRequiresUserAction={false} // Allow Autoplay with Sound (iOS/Android)
+                    allowsFullscreenVideo={true} // Enable Fullscreen
+                    mediaPlaybackRequiresUserAction={false} // Allow Autoplay
                     allowsBackForwardNavigationGestures={true}
                     injectedJavaScript={INJECTED_JS}
                     onLoadEnd={() => {
