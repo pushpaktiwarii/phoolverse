@@ -6,6 +6,7 @@ export function useRoomSocket(roomId, username) {
     const [roomState, setRoomState] = useState({ users: [] });
     const [messages, setMessages] = useState([]);
     const [videoState, setVideoState] = useState({ isPlaying: false, position: 0, url: null, controller: null });
+    const [gameState, setGameState] = useState({ type: null, board: null, turn: null, winner: null, scores: {} });
     const [reactionStream, setReactionStream] = useState([]);
 
     const socketRef = useRef(null);
@@ -34,6 +35,7 @@ export function useRoomSocket(roomId, username) {
         socket.on('sync_state', (state) => {
             // Initial Sync
             setVideoState(state.videoState);
+            setGameState(state.gameState || { type: null });
             setRoomState({ users: state.users });
             setMessages(state.messages);
         });
@@ -49,6 +51,10 @@ export function useRoomSocket(roomId, username) {
 
         socket.on('video_update', (newState) => {
             setVideoState(prev => ({ ...prev, ...newState }));
+        });
+
+        socket.on('game_update', (newState) => {
+            setGameState(prev => ({ ...prev, ...newState }));
         });
 
         socket.on('new_message', (msg) => {
@@ -98,13 +104,25 @@ export function useRoomSocket(roomId, username) {
         });
     };
 
+    const updateGameState = (newState) => {
+        if (!socketRef.current) return;
+        // Optimistic Update handled by listener usually, but for games instant feedback is nice.
+        // However, with turn-based, waiting for server is safer to avoid desync.
+        socketRef.current.emit('update_game', {
+            roomId,
+            gameState: newState
+        });
+    };
+
     return {
         roomState,
         messages,
         videoState,
+        gameState,
         reactionStream,
         sendMessage,
         sendReaction,
-        updateVideoState
+        updateVideoState,
+        updateGameState
     };
 }
