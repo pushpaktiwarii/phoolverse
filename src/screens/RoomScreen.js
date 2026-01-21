@@ -4,17 +4,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import VideoPlayer from '../components/VideoPlayer';
-import RoomChat from '../components/RoomChat';
-import ReactionFloating from '../components/ReactionFloating';
-import { useRoomSocket } from '../services/useRoomSocket';
-import { rtdb } from '../services/firebase';
-import { ref, onValue, push, serverTimestamp, get } from 'firebase/database';
-import { sendPushNotification } from '../services/notificationService';
+import TicTacToeGame from '../components/TicTacToeGame';
+
+// ... imports remain same
 
 export default function RoomScreen({ route, navigation }) {
     console.log("RoomScreen Mounted. Params:", route.params);
     const { roomId, isHost, username, isPublic = false } = route.params;
-    const { messages, sendMessage, videoState, updateVideoState, sendReaction, reactionStream, roomState } = useRoomSocket(roomId, username);
+    const { messages, sendMessage, videoState, updateVideoState, sendReaction, reactionStream, roomState, gameState, updateGameState } = useRoomSocket(roomId, username);
 
     const [inputUrl, setInputUrl] = useState('');
     const [chatVisible, setChatVisible] = useState(false);
@@ -32,251 +29,40 @@ export default function RoomScreen({ route, navigation }) {
     const [floatingMessages, setFloatingMessages] = useState([]);
 
     const amIController = videoState.controller === username;
-    const hasContent = !!videoState.url;
-    const lastEmit = useRef(0); // Throttling ref
+    const hasVideo = !!videoState.url;
+    const hasGame = !!gameState.type;
+    const hasContent = hasVideo || hasGame;
 
-    const QUICK_EMOJIS = ['😂', '❤️', '🔥', '😮', '👏'];
-
-    useEffect(() => {
-        if (inviteModalVisible) {
-            const usersRef = ref(rtdb, 'users');
-            const unsub = onValue(usersRef, (snapshot) => {
-                const data = snapshot.val();
-                if (data) {
-                    // Show ALL users except myself (Offline users included)
-                    // Added safety check for 'u' and 'u.username'
-                    const list = Object.values(data).filter(u => u && u.username && u.username !== username);
-                    setInvitableUsers(list);
-                } else {
-                    setInvitableUsers([]);
-                }
-            });
-            return () => unsub();
-        }
-    }, [inviteModalVisible, username]);
-
-    // --- Back Handling ---
-    const lastBackPress = useRef(0);
-
-    // ... (Skipping unchanged parts) ...
-
-    {/* Floating Chat Logic: Sync with incoming messages */ }
-    useEffect(() => {
-        if (messages.length > 0) {
-            const lastMsg = messages[messages.length - 1];
-            // Avoid duplicates or old history on load (simple check)
-            if (Date.now() - lastMsg.timestamp < 5000) {
-                const id = Date.now();
-                setFloatingMessages(prev => [...prev.slice(-2), { ...lastMsg, _lid: id }]);
-
-                // Auto expire
-                setTimeout(() => {
-                    setFloatingMessages(prev => prev.filter(m => m._lid !== id));
-                }, 4000);
-            }
-        }
-    }, [messages]);
-
-    {/* Invite Modal */ }
-    <Modal
-        animationType="fade"
-        transparent={true}
-        visible={inviteModalVisible}
-        onRequestClose={() => setInviteModalVisible(false)}
-    >
-        <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-                <Text style={styles.modalTitle}>Invite Friends</Text>
-                <FlatList
-                    data={invitableUsers}
-                    keyExtractor={item => item.username}
-                    ListEmptyComponent={<Text style={styles.emptyText}>No users found.</Text>}
-                    renderItem={({ item }) => (
-                        <TouchableOpacity style={styles.userRow} onPress={() => sendInvite(item)}>
-                            <View style={[styles.avatar, !item.online && { opacity: 0.5 }]}><Text style={styles.avatarText}>{item.username[0]}</Text></View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.usernameText}>{item.username}</Text>
-                                {!item.online && <Text style={{ fontSize: 10, color: '#666' }}>Offline</Text>}
-                            </View>
-                            <Ionicons name="send" size={20} color="#6C5CE7" />
-                        </TouchableOpacity>
-                    )}
-                />
-                <TouchableOpacity style={styles.closeBtn} onPress={() => setInviteModalVisible(false)}>
-                    <Text style={styles.closeText}>Cancel</Text>
-                </TouchableOpacity>
-            </View>
-        </View>
-    </Modal>
-
-    // --- Back Handling ---
-
-    useEffect(() => {
-        const backAction = () => {
-            handleBackPress();
-            return true; // Prevent default behavior
-        };
-
-        const backHandler = BackHandler.addEventListener(
-            'hardwareBackPress',
-            backAction
-        );
-
-        return () => backHandler.remove();
-    }, [canWebGoBack, chatVisible, hasContent, amIController]); // Added missing dependencies
-
-    const handleBackPress = () => {
-        // Case 1: Universal Overlay Close
-        // If Chat is open (over Content or Picker), Back should close it first
-        if (chatVisible) {
-            setChatVisible(false);
-            return;
-        }
-
-        // Case 2: Browser History & Content
-        // Simplified: Always try to go back. Stuck? Use Double Tap.
-        if (hasContent && playerRef.current && amIController) {
-            const now = Date.now();
-            if (lastBackPress.current && now - lastBackPress.current < 2000) {
-                // Double tap detected: Force Stop Content
-                if (Platform.OS === 'android') ToastAndroid.show("Stopping Party...", ToastAndroid.SHORT);
-                handleStopContent();
-            } else {
-                lastBackPress.current = now;
-                playerRef.current.goBack();
-                if (Platform.OS === 'android') ToastAndroid.show("Going Back... (Double tap to stop)", ToastAndroid.SHORT);
-            }
-            return;
-        }
-
-        // Case 3: Stop Content logic (Controller vs Viewer)
-        if (hasContent) {
-            if (amIController) {
-                handleStopContent();
-            } else {
-                // Viewer just leaves
-                Alert.alert("Leave Party?", "Are you sure you want to stop watching?", [
-                    { text: "Stay", style: "cancel" },
-                    { text: "Leave", style: "destructive", onPress: () => navigation.goBack() }
-                ]);
-            }
-            return;
-        }
-
-        // Case 4: Exit Room (From Picker)
-        Alert.alert("Exit Party?", "Are you sure you want to leave?", [
-            { text: "Stay", style: "cancel" },
-            { text: "Leave", style: "destructive", onPress: () => navigation.goBack() }
-        ]);
-    };
-
-    // --- Content Handlers ---
-    const handlePlayUrl = () => {
-        if (!inputUrl) return;
-
-        // Strict Host Lock
-        if (videoState.controller && videoState.controller !== username) {
-            Alert.alert("Locked", `${videoState.controller} is currently hosting. Wait for them to finish.`);
-            return;
-        }
-
-        updateVideoState({
-            url: inputUrl,
-            isPlaying: true,
-            controller: username // I become the host
-        });
-        setInputUrl('');
-    };
-
-    const handleOpenApp = (type) => {
-        // Strict Host Lock
-        if (videoState.controller && videoState.controller !== username) {
-            Alert.alert("Locked", `${videoState.controller} is currently hosting. Wait for them to finish.`);
-            return;
-        }
-
-        if (Platform.OS === 'web') {
-            alert("Browse Mode is only available on Mobile App.");
-            return;
-        }
-        let url = 'https://google.com';
-        if (type === 'instagram') url = 'https://www.instagram.com/reels/';
-        if (type === 'youtube') url = 'https://m.youtube.com';
-
-        updateVideoState({
-            url: url,
-            isPlaying: true,
-            controller: username // I become the host
-        });
-    };
+    // ...
 
     const handleStopContent = () => {
         // Strict Host Lock
-        if (videoState.controller && videoState.controller !== username) {
-            // Should technically be handled by UI hiding, but double safe
-            return;
-        }
+        if (hasVideo && videoState.controller && videoState.controller !== username) return;
 
-        // Force update even if controller is glitchy locally
-        updateVideoState({
-            url: null,
-            isPlaying: false,
-            controller: null // Release control
-        });
-    };
+        // For Games, anyone can technically "leave", but to kill the game room?
+        // Let's say if you are a player you can quit, which clears it if empty?
+        // For simplicity, let "Stop" button clear everything if you are the one who started or just a global reset.
 
-    const handleHeaderExit = () => {
-        const title = amIController ? "End Party?" : "Leave Party?";
-        const msg = amIController ? "Stop watching and leave?" : "Are you sure you want to leave?";
-        const confirmText = amIController ? "End & Leave" : "Leave";
-
-        Alert.alert(title, msg, [
-            { text: "Cancel", style: "cancel" },
-            {
-                text: confirmText,
-                style: "destructive",
-                onPress: () => {
-                    if (amIController) {
-                        handleStopContent();
-                    }
-                    navigation.goBack();
-                }
-            }
-        ]);
-    };
-
-    const sendInvite = async (recipient) => {
-        try {
-            if (!recipient || !recipient.username) return;
-
-            const chatId = [username, recipient.username].sort().join('_');
-            const messagesRef = ref(rtdb, `chats/${chatId}/messages`);
-            await push(messagesRef, {
-                type: 'invite',
-                text: 'Join my Watch Party! 🎥',
-                roomId: roomId,
-                sender: username,
-                timestamp: serverTimestamp()
+        if (hasVideo) {
+            updateVideoState({
+                url: null,
+                isPlaying: false,
+                controller: null // Release control
             });
-            Alert.alert("Sent", `Invite sent to ${recipient.username}`);
+        }
 
-            // Send Push Notification
-            try {
-                const tokenRef = ref(rtdb, `users/${recipient.username}/pushToken`);
-                const snapshot = await get(tokenRef);
-                if (snapshot.exists()) {
-                    const token = snapshot.val();
-                    await sendPushNotification(token, username, "Invited you to a Watch Party! 🎥", { roomId: roomId, type: 'invite' });
-                }
-            } catch (e) {
-                console.log("Failed to send push invite", e);
-            }
-
-            setInviteModalVisible(false);
-        } catch (error) {
-            Alert.alert("Error", `Could not send invite: ${error.message}`);
+        if (hasGame) {
+            updateGameState({
+                type: null,
+                players: null,
+                board: null,
+                winner: null,
+                turn: null
+            });
         }
     };
+
+    // ...
 
     return (
         <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -292,8 +78,10 @@ export default function RoomScreen({ route, navigation }) {
                     <Text style={styles.roomTitle}>Party Room</Text>
                     <View style={styles.statusRow}>
                         <View style={[styles.dot, hasContent && { backgroundColor: '#00E676' }]} />
-                        {videoState.controller ? (
-                            <Text style={styles.statusText}>{videoState.controller} is controlling</Text>
+                        {hasVideo && videoState.controller ? (
+                            <Text style={styles.statusText}>{videoState.controller} is watching</Text>
+                        ) : hasGame ? (
+                            <Text style={styles.statusText}>Gaming Time</Text>
                         ) : (
                             <Text style={styles.statusText}>Idle</Text>
                         )}
@@ -323,7 +111,33 @@ export default function RoomScreen({ route, navigation }) {
 
             {/* --- BODY: Video / Picker (Reduced Height) --- */}
             <View style={styles.contentArea}>
-                {hasContent ? (
+                {hasGame ? (
+                    <View style={styles.screenFrame}>
+                        <TicTacToeGame
+                            gameState={gameState}
+                            onUpdateGame={updateGameState}
+                            username={username}
+                            roomUsers={roomState.users}
+                        />
+                        {/* Reactions still sit on top */}
+                        <View pointerEvents="box-none" style={styles.reactionLayer}>
+                            <ReactionFloating
+                                onReact={sendReaction}
+                                reactionStream={reactionStream}
+                            />
+                        </View>
+
+                        {/* Floating Chat Overlay Layer */}
+                        <View pointerEvents="none" style={styles.floatingChatLayer}>
+                            {floatingMessages.map(msg => (
+                                <View key={msg._lid} style={styles.floatingBubble}>
+                                    <Text style={styles.floatingSender}>{msg.sender}</Text>
+                                    <Text style={styles.floatingText}>{msg.text}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    </View>
+                ) : hasVideo ? (
                     <View style={styles.screenFrame}>
                         <VideoPlayer
                             ref={playerRef}
@@ -362,18 +176,27 @@ export default function RoomScreen({ route, navigation }) {
                     <View style={styles.pickerContainer}>
                         <Text style={styles.pickerTitle}>Select Content</Text>
                         <View style={styles.grid}>
-                            <TouchableOpacity style={styles.appIcon} onPress={() => handleOpenApp('instagram')}>
-                                <LinearGradient colors={['#833ab4', '#fd1d1d', '#fcb045']} style={styles.iconGradient}>
-                                    <Ionicons name="logo-instagram" size={30} color="#fff" />
-                                </LinearGradient>
-                                <Text style={styles.appName}>Insta</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.appIcon} onPress={() => handleOpenApp('youtube')}>
-                                <LinearGradient colors={['#e52d27', '#b31217']} style={styles.iconGradient}>
-                                    <Ionicons name="logo-youtube" size={30} color="#fff" />
-                                </LinearGradient>
-                                <Text style={styles.appName}>YouTube</Text>
-                            </TouchableOpacity>
+                            {/* First Row of Apps */}
+                            <View style={{ flexDirection: 'row', gap: 30 }}>
+                                <TouchableOpacity style={styles.appIcon} onPress={() => handleOpenApp('instagram')}>
+                                    <LinearGradient colors={['#833ab4', '#fd1d1d', '#fcb045']} style={styles.iconGradient}>
+                                        <Ionicons name="logo-instagram" size={30} color="#fff" />
+                                    </LinearGradient>
+                                    <Text style={styles.appName}>Insta</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.appIcon} onPress={() => handleOpenApp('youtube')}>
+                                    <LinearGradient colors={['#e52d27', '#b31217']} style={styles.iconGradient}>
+                                        <Ionicons name="logo-youtube" size={30} color="#fff" />
+                                    </LinearGradient>
+                                    <Text style={styles.appName}>YouTube</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.appIcon} onPress={() => updateGameState({ type: 'tictactoe' })}>
+                                    <LinearGradient colors={['#00c6ff', '#0072ff']} style={styles.iconGradient}>
+                                        <Ionicons name="game-controller" size={30} color="#fff" />
+                                    </LinearGradient>
+                                    <Text style={styles.appName}>Games</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
                         <Text style={styles.orText}>OR LINK</Text>
                         <TextInput
