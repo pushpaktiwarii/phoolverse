@@ -30,6 +30,7 @@ io.on('connection', (socket) => {
             rooms[roomId] = {
                 users: new Set(),
                 videoState: { url: null, isPlaying: false, position: 0, controller: null },
+                gameState: { type: null, board: null, turn: null, winner: null, scores: {} }, // Game State
                 messages: [] // Keep last ~50 in memory
             };
         }
@@ -40,6 +41,7 @@ io.on('connection', (socket) => {
         // Send Sync Data (Current State)
         socket.emit('sync_state', {
             videoState: rooms[roomId].videoState,
+            gameState: rooms[roomId].gameState,
             users: Array.from(rooms[roomId].users),
             messages: rooms[roomId].messages
         });
@@ -57,6 +59,16 @@ io.on('connection', (socket) => {
 
         // Broadcast to everyone else active in the room
         socket.to(roomId).emit('video_update', rooms[roomId].videoState);
+    });
+
+    socket.on('update_game', ({ roomId, gameState }) => {
+        if (!rooms[roomId]) return;
+
+        // Update State
+        rooms[roomId].gameState = { ...rooms[roomId].gameState, ...gameState };
+
+        // Broadcast to EVERYONE (including sender for sync consistency)
+        io.to(roomId).emit('game_update', rooms[roomId].gameState);
     });
 
     socket.on('send_message', ({ roomId, message }) => {
